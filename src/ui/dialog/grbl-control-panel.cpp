@@ -119,7 +119,9 @@ std::string detect_radio_mode_from_reply(std::string reply)
             char const ch = reply[idx];
             return !(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_');
         };
-        return boundary(p == 0 ? reply.size() : p - 1) || boundary(p + t.size());
+        bool const left_ok = (p == 0) ? true : boundary(p - 1);
+        bool const right_ok = boundary(p + t.size());
+        return left_ok && right_ok;
     };
     if (has_token("STA")) return "STA";
     if (has_token("AP")) return "AP";
@@ -285,47 +287,21 @@ void GrblControlPanel::on_unmap()
 
 void GrblControlPanel::post_status(Glib::ustring const &text, bool const is_error)
 {
-    // g_idle_add is thread-safe in GLib for adding to the default main context.
-    struct Pack
-    {
-        GrblControlPanel *self;
-        Glib::ustring text;
-        bool err;
-    };
-    auto *pack = new Pack{this, text, is_error};
-
-    g_idle_add_full(
-        G_PRIORITY_DEFAULT_IDLE, +[](void *data) -> int {
-            auto *p = static_cast<Pack *>(data);
-            p->self->_status.set_use_markup(p->err);
-            if (p->err) {
-                p->self->_status.set_markup("<span foreground=\"red\">" + Glib::Markup::escape_text(p->text) + "</span>");
-            } else {
-                p->self->_status.set_text(p->text);
-            }
-            delete p;
-            return G_SOURCE_REMOVE;
-        },
-        pack, nullptr);
+    Glib::signal_idle().connect_once(sigc::track_object([this, text, is_error] {
+        _status.set_use_markup(is_error);
+        if (is_error) {
+            _status.set_markup("<span foreground=\"red\">" + Glib::Markup::escape_text(text) + "</span>");
+        } else {
+            _status.set_text(text);
+        }
+    }, *this));
 }
 
 void GrblControlPanel::post_machine_status(Glib::ustring const &text)
 {
-    struct Pack
-    {
-        GrblControlPanel *self;
-        Glib::ustring text;
-    };
-    auto *pack = new Pack{this, text};
-
-    g_idle_add_full(
-        G_PRIORITY_DEFAULT_IDLE, +[](void *data) -> int {
-            auto *p = static_cast<Pack *>(data);
-            p->self->_machine_status.set_text(p->text);
-            delete p;
-            return G_SOURCE_REMOVE;
-        },
-        pack, nullptr);
+    Glib::signal_idle().connect_once(sigc::track_object([this, text] {
+        _machine_status.set_text(text);
+    }, *this));
 }
 
 bool GrblControlPanel::link_is_open() const
@@ -908,15 +884,11 @@ void GrblControlPanel::set_controls_sensitive_for_gcode_stream(bool const allow_
 
 void GrblControlPanel::finish_gcode_stream_ui()
 {
-    g_idle_add_full(
-        G_PRIORITY_DEFAULT_IDLE, +[](void *data) -> int {
-            auto *self = static_cast<GrblControlPanel *>(data);
-            self->_gcode_sending = false;
-            self->_gcode_cancel = false;
-            self->set_controls_sensitive_for_gcode_stream(true);
-            return G_SOURCE_REMOVE;
-        },
-        this, nullptr);
+    Glib::signal_idle().connect_once(sigc::track_object([this] {
+        _gcode_sending = false;
+        _gcode_cancel = false;
+        set_controls_sensitive_for_gcode_stream(true);
+    }, *this));
 }
 
 void GrblControlPanel::on_cancel_gcode_stream()

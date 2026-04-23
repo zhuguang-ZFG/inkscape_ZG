@@ -9,6 +9,7 @@
 #include "tcp-port.h"
 
 #include <chrono>
+#include <cctype>
 #include <functional>
 #include <thread>
 
@@ -22,6 +23,31 @@ char const g_user_cancel_err[] = "INKSCAPE_GRBL_USER_CANCEL";
 
 static std::function<void()> s_pump;
 static std::atomic<bool> const *s_cancel = nullptr;
+
+bool contains_ascii_case_insensitive(std::string_view haystack, std::string_view needle)
+{
+    if (needle.empty()) {
+        return true;
+    }
+    if (haystack.size() < needle.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
+        bool ok = true;
+        for (std::size_t j = 0; j < needle.size(); ++j) {
+            auto const h = static_cast<unsigned char>(haystack[i + j]);
+            auto const n = static_cast<unsigned char>(needle[j]);
+            if (std::tolower(h) != std::tolower(n)) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            return true;
+        }
+    }
+    return false;
+}
 
 } // namespace
 
@@ -62,10 +88,15 @@ std::string grbl_error_to_user_message(std::string const &err)
         auto const detail = err.substr(std::char_traits<char>::length(k_unexpected));
         return Glib::ustring::compose(_("Unexpected response from the controller:\n%1"), Glib::ustring(detail)).raw();
     }
-    if (err.rfind("error", 0) == 0 || err.find("ERROR") != std::string::npos) {
+    if (grbl_is_error_line(err)) {
         return Glib::ustring::compose(_("The controller reported an error:\n%1"), Glib::ustring(err)).raw();
     }
     return err;
+}
+
+bool grbl_is_error_line(std::string_view line)
+{
+    return contains_ascii_case_insensitive(line, "error");
 }
 
 static void grbl_progress_tick()
@@ -115,7 +146,7 @@ static bool grbl_wait_ok(PortT &port, std::string &err_out)
         if (line.starts_with("ok")) {
             return true;
         }
-        if (line.starts_with("error") || line.find("ERROR") != std::string::npos) {
+        if (grbl_is_error_line(line)) {
             err_out = line;
             return false;
         }
@@ -184,7 +215,7 @@ GrblProbeResult probe_grbl(std::string const &device, int baud)
     }
 
     r.response_line = std::move(line);
-    if (r.response_line.find("error") != std::string::npos) {
+    if (grbl_is_error_line(r.response_line)) {
         r.ok = false;
         return r;
     }
@@ -223,7 +254,7 @@ GrblProbeResult probe_grbl_tcp(std::string const &host, int port)
         return r;
     }
     r.response_line = std::move(line);
-    if (r.response_line.find("error") != std::string::npos) {
+    if (grbl_is_error_line(r.response_line)) {
         r.ok = false;
         return r;
     }

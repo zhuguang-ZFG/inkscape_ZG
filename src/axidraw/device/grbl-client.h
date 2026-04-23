@@ -8,6 +8,7 @@
 #include <atomic>
 #include <functional>
 #include <string>
+#include <string_view>
 
 namespace Inkscape::Axidraw {
 
@@ -26,6 +27,8 @@ char const *grbl_error_user_cancelled() noexcept;
 
 /** Convert low-level GRBL / serial errors into a more user-facing message. */
 std::string grbl_error_to_user_message(std::string const &err);
+/** True when a controller reply line is an error (case-insensitive). */
+bool grbl_is_error_line(std::string_view line);
 
 struct GrblProbeResult {
     bool ok{};

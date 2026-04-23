@@ -6,6 +6,7 @@
 #include "tcp-port.h"
 
 #include <cstring>
+#include <chrono>
 #include <string>
 
 #ifdef _WIN32
@@ -249,16 +250,28 @@ bool TcpPort::read_line(std::string &out, int timeout_ms)
     }
 
     char tmp[512];
-    size_t n = read_chunk(tmp, sizeof(tmp), timeout_ms);
-    if (n == 0) {
-        return false;
+    using clock = std::chrono::steady_clock;
+    auto const start = clock::now();
+    for (;;) {
+        int wait_ms = timeout_ms;
+        if (timeout_ms >= 0) {
+            auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - start).count();
+            if (elapsed >= timeout_ms) {
+                return false;
+            }
+            wait_ms = timeout_ms - static_cast<int>(elapsed);
+        }
+
+        size_t const n = read_chunk(tmp, sizeof(tmp), wait_ms);
+        if (n == 0) {
+            return false;
+        }
+        rxbuf_.append(tmp, n);
+        if (auto p = rxbuf_.find('\n'); p != std::string::npos) {
+            pop_line(p);
+            return true;
+        }
     }
-    rxbuf_.append(tmp, n);
-    if (auto p = rxbuf_.find('\n'); p != std::string::npos) {
-        pop_line(p);
-        return true;
-    }
-    return false;
 }
 
 } // namespace Inkscape::Axidraw
