@@ -28,7 +28,11 @@ if(NOT EXISTS ${INKSCAPE_DATADIR}/inkscape)
 endif()
 # check if creation succeeded
 if(EXISTS ${INKSCAPE_DATADIR}/inkscape)
-    set(CMAKE_CTEST_ENV INKSCAPE_DATADIR=${INKSCAPE_DATADIR})
+    if(WIN32)
+        set(CMAKE_CTEST_ENV INKSCAPE_DATADIR=${CMAKE_SOURCE_DIR}/share)
+    else()
+        set(CMAKE_CTEST_ENV INKSCAPE_DATADIR=${INKSCAPE_DATADIR})
+    endif()
 else()
     message(WARNING "Directory 'inkscape_datadir/inkscape' missing. Tests might not run properly.\n"
                     "Possible solutions:\n"
@@ -81,6 +85,7 @@ set(TEST_SOURCES
     util-uri-test
     drag-and-drop-svgz
     drawing-pattern-test
+    grbl-export-test
     split-path-test
     attributes-test
     dir-util-test
@@ -140,7 +145,12 @@ if(WITH_CAPYPDF)
     )
 endif()
 
-add_library(cpp_test_static_library SHARED inkscape-test.cpp doc-per-case-test.cpp compare-paths-test.h lpespaths-test.h store-integrity-test.h test-with-svg-object-pairs.cpp)
+set(cpp_test_static_library_type SHARED)
+if(WIN32)
+    set(cpp_test_static_library_type STATIC)
+endif()
+
+add_library(cpp_test_static_library ${cpp_test_static_library_type} inkscape-test.cpp doc-per-case-test.cpp compare-paths-test.h lpespaths-test.h store-integrity-test.h test-with-svg-object-pairs.cpp)
 target_link_libraries(cpp_test_static_library PUBLIC ${GTEST_LIBRARIES} inkscape_base)
 
 add_custom_target(tests)
@@ -151,7 +161,9 @@ foreach(test_source ${TEST_SOURCES})
     target_include_directories(${testname} SYSTEM PRIVATE ${GTEST_INCLUDE_DIRS})
     target_link_libraries(${testname} cpp_test_static_library 2Geom::2geom)
     add_test(NAME ${testname} COMMAND ${testname})
-    set_tests_properties(${testname} PROPERTIES ENVIRONMENT "${INKSCAPE_TEST_PROFILE_DIR_ENV}/${testname};${CMAKE_CTEST_ENV}")
+    set_tests_properties(${testname} PROPERTIES
+        ENVIRONMENT "${INKSCAPE_TEST_PROFILE_DIR_ENV}/${testname};${CMAKE_CTEST_ENV}"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
     add_dependencies(tests ${testname})
 endforeach()
 foreach(test_source ${LIBNRTYPE_TESTS})

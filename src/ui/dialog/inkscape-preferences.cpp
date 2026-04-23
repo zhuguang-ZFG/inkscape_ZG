@@ -2594,6 +2594,181 @@ void InkscapePreferences::initPageIO()
 
     this->AddPage(_page_autosave, _("Autosave"), iter_io, PREFS_PAGE_IO_AUTOSAVE);
 
+    _page_grbl.add_group_header(_("Connection"));
+    _grbl_serial_device.init("/options/grbl/serial-device", false);
+    _page_grbl.add_line(
+        false, _("_Serial device:"), _grbl_serial_device, "",
+        _("Serial port of the GRBL controller, for example <tt>COM3</tt> on Windows or <tt>/dev/ttyUSB0</tt> on Linux. "
+          "Leave empty to be asked when you start a plot."),
+        true);
+    _grbl_baud.init("/options/grbl/baud", 9600.0, 230400.0, 1.0, 100.0, 115200.0, true, false);
+    _page_grbl.add_line(false, _("_Baud rate:"), _grbl_baud, "",
+                        _("Line speed for the serial link (commonly 115200 for many GRBL/ESP32 boards)."), false);
+    _grbl_net_host.init("/options/grbl/net-host", false);
+    _page_grbl.add_line(
+        false, _("_WiFi host:"), _grbl_net_host, "",
+        _("Optional TCP endpoint host/IP for GRBL over WiFi (for example <tt>192.168.4.1</tt>). "
+          "If “Serial device” starts with <tt>tcp://host:port</tt>, that value takes precedence."),
+        true);
+    _grbl_net_port.init("/options/grbl/net-port", 1.0, 65535.0, 1.0, 10.0, 23.0, true, false);
+    _page_grbl.add_line(
+        false, _("WiFi _port:"), _grbl_net_port, "",
+        _("TCP port for WiFi GRBL links (Telnet is commonly port 23 on Grbl_ESP32)."), false);
+
+    _page_grbl.add_group_header(_("Plotting"));
+    _grbl_flatness.init("/options/grbl/flatness", 0.001, 10.0, 0.001, 0.1, 0.08, false, false);
+    _page_grbl.add_line(
+        false, _("_Flatness (mm):"), _grbl_flatness, "",
+        _("Maximum distance between a curve in the document and the straight G-code segments (smaller = smoother, more data)."),
+        false);
+    _grbl_feed_draw.init("/options/grbl/feed-draw-mmmin", 60.0, 12000.0, 10.0, 100.0, 1200.0, false, false);
+    _page_grbl.add_line(false, _("_Draw speed (mm/min):"), _grbl_feed_draw, "",
+                        _("G1 feed rate for drawing (cutting) moves, in millimeters per minute."), false);
+    _grbl_feed_travel.init("/options/grbl/feed-travel-mmmin", 60.0, 20000.0, 10.0, 100.0, 6000.0, false, false);
+    _page_grbl.add_line(
+        false, _("_Rapid (travel) speed (mm/min):"), _grbl_feed_travel, "",
+        _("G0 feed rate (where supported) or G1 speed for move-only segments between pen-down strokes, in millimeters per minute."),
+        false);
+
+    Glib::ustring const grbl_pen_mode_labels[] = {_("Z axis (G-code lines)"), _("M3/M5 (spindle / Paixi-style pen)")};
+    Glib::ustring const grbl_pen_mode_values[] = {Glib::ustring("z"), Glib::ustring("m3m5")};
+    _grbl_pen_control.init("/options/grbl/pen-control", grbl_pen_mode_labels, grbl_pen_mode_values, Glib::ustring("z"));
+    _page_grbl.add_line(
+        false, _("_Pen control:"), _grbl_pen_control, "",
+        _("How to move the pen between strokes: with explicit Z G-code lines, or M3 (down) / M5 (up) as on some Grbl_Esp32 setups (NullSpindle / PAIXI). When M3/M5 is selected, the “Pen up G-code”/“Pen down G-code” lines below are ignored in favor of fixed M5/M3 S1000 commands."),
+        false);
+    _grbl_pen_up.init("/options/grbl/pen-up-cmd", false);
+    _grbl_pen_down.init("/options/grbl/pen-down-cmd", false);
+    _page_grbl.add_line(
+        false, _("_Pen up (G-code line):"), _grbl_pen_up, "",
+        _("Single line, typically <tt>G1 Z…</tt> with safe travel, used when “Z axis (G-code lines)” is selected."), true);
+    _page_grbl.add_line(
+        false, _("P_en down (G-code line):"), _grbl_pen_down, "",
+        _("Single line, typically <tt>G1 Z…</tt> to lower the pen, used when “Z axis (G-code lines)” is selected."), true);
+
+    _grbl_limit_layer.init(_("When nothing is selected, only plot the current _layer"), "/options/grbl/limit-to-current-layer", false);
+    _page_grbl.add_line(
+        false, "", _grbl_limit_layer, "",
+        _("If enabled and the selection is empty, only the current layer’s content is sent; if disabled, the full document is considered."),
+        true, reset_icon());
+    _grbl_optimize_order.init(
+        _("_Reorder paths to reduce travel (nearest-neighbor)"), "/options/grbl/optimize-stroke-order", true);
+    _page_grbl.add_line(
+        false, "", _grbl_optimize_order, "",
+        _("Approximate TSP: reorder polylines to reduce rapid moves between them (G0)."),
+        true, reset_icon());
+    _grbl_optimize_direction.init(
+        _("Allow path _direction reversal during reordering"), "/options/grbl/optimize-stroke-direction", true);
+    _page_grbl.add_line(
+        false, "", _grbl_optimize_direction, "",
+        _("When enabled, each polyline may be reversed so travel starts from the closer endpoint, usually reducing pen-up moves."),
+        true, reset_icon());
+    _grbl_contour_to_hatch.init(
+        _("Convert closed _contours to hatch scanlines"), "/options/grbl/contour-to-hatch", false);
+    _page_grbl.add_line(
+        false, "", _grbl_contour_to_hatch, "",
+        _("For closed contours, generate engraving-style horizontal scanlines instead of following the boundary."),
+        true, reset_icon());
+    _grbl_hatch_spacing.init("/options/grbl/hatch-spacing-mm", 0.05, 100.0, 0.05, 0.5, 1.0, false, false);
+    _page_grbl.add_line(
+        false, _("Hatch _spacing (mm):"), _grbl_hatch_spacing, "",
+        _("Distance between adjacent scanlines when “Convert closed contours to hatch scanlines” is enabled."),
+        false);
+    _grbl_optimize_direction.set_sensitive(_grbl_optimize_order.get_active());
+    _grbl_contour_to_hatch.set_sensitive(true);
+    _grbl_hatch_spacing.set_sensitive(_grbl_contour_to_hatch.get_active());
+    _grbl_optimize_order.changed_signal.connect([this](bool) {
+        _grbl_optimize_direction.set_sensitive(_grbl_optimize_order.get_active());
+    });
+    _grbl_contour_to_hatch.changed_signal.connect([this](bool) {
+        _grbl_hatch_spacing.set_sensitive(_grbl_contour_to_hatch.get_active());
+    });
+
+    _page_grbl.add_group_header(_("Plot coordinates and limits"));
+    _grbl_flip_y_canvas.init(
+        _("Mirror Y using page _height (screen-like orientation)"), "/options/grbl/flip-y-canvas", false);
+    _page_grbl.add_line(
+        false, "", _grbl_flip_y_canvas, "",
+        _("After converting the document to millimetres, replace Y with (page height in mm − Y). Useful when the machine’s "
+          "+Y direction matches the upward direction on your canvas."),
+        true, reset_icon());
+    _grbl_align_origin.init(
+        _("Shift plot so lower-_left of bounds is at machine X0 Y0"), "/options/grbl/align-content-min", false);
+    _page_grbl.add_line(
+        false, "", _grbl_align_origin, "",
+        _("Subtracts the minimum X and Y of all exported points (in machine millimetres after optional mirroring) so the "
+          "bounding box corner sits at the origin—handy when homing the pen to the front-left corner."),
+        true, reset_icon());
+    _grbl_clip_bed.init(_("Clip segments to machine _bed size"), "/options/grbl/clip-to-machine-bed", false);
+    _page_grbl.add_line(
+        false, "", _grbl_clip_bed, "",
+        _("Keeps G0/G1 moves inside a rectangle from (0, 0) to the width/depth below. Segments are clipped; disjoint pieces "
+          "become separate pen strokes."),
+        true, reset_icon());
+    _grbl_bed_width.init("/options/grbl/machine-bed-width-mm", 1.0, 2000.0, 1.0, 10.0, 300.0, false, false);
+    _page_grbl.add_line(
+        false, _("Bed _width (mm):"), _grbl_bed_width, "",
+        _("X extent of the safe plotting area used when clipping is enabled (millimetres along machine X)."), false);
+    _grbl_bed_depth.init("/options/grbl/machine-bed-depth-mm", 1.0, 2000.0, 1.0, 10.0, 200.0, false, false);
+    _page_grbl.add_line(
+        false, _("Bed _depth (mm):"), _grbl_bed_depth, "",
+        _("Y extent of the safe plotting area used when clipping is enabled (millimetres along machine Y)."), false);
+    _grbl_bed_width.set_sensitive(_grbl_clip_bed.get_active());
+    _grbl_bed_depth.set_sensitive(_grbl_clip_bed.get_active());
+    _grbl_clip_bed.changed_signal.connect([this](bool) {
+        _grbl_bed_width.set_sensitive(_grbl_clip_bed.get_active());
+        _grbl_bed_depth.set_sensitive(_grbl_clip_bed.get_active());
+    });
+
+    _page_grbl.add_group_header(_("Layer pauses and pen change"));
+    _grbl_auto_pause_layers.init(
+        _("Pause at each _layer boundary (after the first non-empty layer)"), "/options/grbl/auto-pause-between-layers",
+        false);
+    _page_grbl.add_line(
+        false, "", _grbl_auto_pause_layers, "",
+        _("When plotting the whole document (no selection, not “current layer only”), treat each Inkscape layer as a "
+          "segment like inkscape-axidraw’s “auto pause between layers”. The first layer is not preceded by a pause."),
+        true, reset_icon());
+    _grbl_manual_pen_change.init(
+        _("On layer pause: _manual pen change (lift, home, confirm, resume)"), "/options/grbl/manual-pen-change",
+        false);
+    _page_grbl.add_line(
+        false, "", _grbl_manual_pen_change, "",
+        _("Matches inkscape-axidraw’s manual flow: pen up, optional rapid to work XY zero, a confirmation dialog, then "
+          "rapid back to where the previous layer ended. If unchecked but pauses are on, a dwell (below) can be used "
+          "instead."),
+        true, reset_icon());
+    _grbl_pen_change_home.init(_("Move to work _XY zero before confirming pen change"), "/options/grbl/pen-change-to-home",
+                               true);
+    _page_grbl.add_line(
+        false, "", _grbl_pen_change_home, "",
+        _("Sends a rapid to X0 Y0 (work coordinates) before the confirmation step, similar to inkscape-axidraw’s "
+          "“pen_change_to_home”."),
+        true, reset_icon());
+    _grbl_pen_change_prompt.init(_("Ask for _confirmation before resuming"), "/options/grbl/pen-change-prompt", true);
+    _page_grbl.add_line(
+        false, "", _grbl_pen_change_prompt, "",
+        _("Shows a Yes/No dialog between layers when manual pen change is enabled. If disabled, the plot continues "
+          "without waiting (use with care)."),
+        true, reset_icon());
+    _grbl_layer_pause_dwell.init("/options/grbl/auto-layer-pause-dwell-sec", 0.0, 600.0, 0.5, 5.0, 0.0, false, false);
+    _page_grbl.add_line(
+        false, _("Layer pause _dwell (s):"), _grbl_layer_pause_dwell, "",
+        _("If greater than zero and manual pen change is off, a G4 dwell is inserted between layers on each pause. "
+          "Ignored when manual pen change is on."),
+        false);
+    _grbl_pen_change_home.set_sensitive(_grbl_manual_pen_change.get_active());
+    _grbl_pen_change_prompt.set_sensitive(_grbl_manual_pen_change.get_active());
+    _grbl_layer_pause_dwell.set_sensitive(!_grbl_manual_pen_change.get_active());
+    _grbl_manual_pen_change.changed_signal.connect([this](bool) {
+        bool const man = _grbl_manual_pen_change.get_active();
+        _grbl_pen_change_home.set_sensitive(man);
+        _grbl_pen_change_prompt.set_sensitive(man);
+        _grbl_layer_pause_dwell.set_sensitive(!man);
+    });
+
+    this->AddPage(_page_grbl, _("GRBL pen plotter"), iter_io, PREFS_PAGE_IO_GRBL);
+
     // No Result
     _page_notfound.add_group_header(_("No matches were found, try another search!"));
 }

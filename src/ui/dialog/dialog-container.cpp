@@ -17,6 +17,7 @@
 #include "inkscape-window.h"
 #include "ui/dialog/clonetiler.h"
 #include "ui/dialog/debug.h"
+#include "ui/dialog/grbl-control-panel.h"
 #include "ui/dialog/dialog-data.h"
 #include "ui/dialog/dialog-multipaned.h"
 #include "ui/dialog/dialog-window.h"
@@ -109,6 +110,7 @@ std::unique_ptr<DialogBase> DialogContainer::dialog_factory(Glib::ustring const 
     else if (dialog_type == "DocumentResources")  return std::make_unique<DocumentResources>();
     else if (dialog_type == "Export")             return std::make_unique<Export>();
     else if (dialog_type == "ExtensionsGallery")  return std::make_unique<ExtensionsGallery>(ExtensionsGallery::Effects);
+    else if (dialog_type == "GrblControl")         return std::make_unique<GrblControlPanel>();
     else if (dialog_type == "FillStroke")         return std::make_unique<FillAndStroke>();
     else if (dialog_type == "FilterEffects")      return std::make_unique<FilterEffectsDialog>();
     else if (dialog_type == "FilterGallery")      return std::make_unique<ExtensionsGallery>(ExtensionsGallery::Filters);

@@ -403,6 +403,10 @@ override) the bindings in the main default.xml.
   <bind gaction="org.ekips.filter.perspective.ekips" />
   <bind gaction="org.ekips.filter.motion.ekips" />
 
+  <!-- Native GRBL plotter (in-tree); assign keys in a custom keys profile if desired -->
+  <bind gaction="app.axidraw-plot" />
+  <bind gaction="app.axidraw-export-gcode" />
+
   <!-- Effects -->
   <bind gaction="app.last-effect"                        keys="&lt;alt&gt;q" />
   <bind gaction="app.last-effect-pref"                   keys="&lt;shift&gt;&lt;alt&gt;q" />

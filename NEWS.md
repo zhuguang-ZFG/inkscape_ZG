@@ -7,6 +7,7 @@ Released on 2022-02-05
     Inkscape documents can now hold multiple pages, which are managed by the new Page tool
     Editable markers and dash patterns
     On-canvas alignment snapping
+    Native GRBL/AxiDraw plotting integration, including machine-space preview and direct serial controller output
     Selectable origin for numerical scaling and moving
     All alignment options in a single dialog
     Gradient editing in the Fill and Stroke dialog

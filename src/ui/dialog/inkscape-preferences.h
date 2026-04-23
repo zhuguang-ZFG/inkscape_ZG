@@ -89,6 +89,7 @@ enum
     PREFS_PAGE_BITMAPS,
     PREFS_PAGE_RENDERING,
     PREFS_PAGE_SPELLCHECK,
+    PREFS_PAGE_IO_GRBL,
     PREFS_PAGE_NOTFOUND
 };
 
@@ -189,6 +190,7 @@ protected:
     UI::Widget::DialogPage _page_svgexport;
     UI::Widget::DialogPage _page_cms;
     UI::Widget::DialogPage _page_autosave;
+    UI::Widget::DialogPage _page_grbl;
 
     UI::Widget::DialogPage _page_rendering;
     UI::Widget::DialogPage _page_system;
@@ -497,6 +499,32 @@ protected:
     UI::Widget::PrefSpinButton  _save_autosave_interval;
     UI::Widget::PrefEditFolder  _save_autosave_path_dir;
     UI::Widget::PrefSpinButton  _save_autosave_max;
+
+    UI::Widget::PrefEntry         _grbl_serial_device;
+    UI::Widget::PrefSpinButton    _grbl_baud;
+    UI::Widget::PrefEntry         _grbl_net_host;
+    UI::Widget::PrefSpinButton    _grbl_net_port;
+    UI::Widget::PrefSpinButton    _grbl_flatness;
+    UI::Widget::PrefSpinButton    _grbl_feed_draw;
+    UI::Widget::PrefSpinButton    _grbl_feed_travel;
+    UI::Widget::PrefCombo         _grbl_pen_control;
+    UI::Widget::PrefEntry         _grbl_pen_up;
+    UI::Widget::PrefEntry         _grbl_pen_down;
+    UI::Widget::PrefCheckButton   _grbl_limit_layer;
+    UI::Widget::PrefCheckButton   _grbl_optimize_order;
+    UI::Widget::PrefCheckButton   _grbl_optimize_direction;
+    UI::Widget::PrefCheckButton   _grbl_contour_to_hatch;
+    UI::Widget::PrefSpinButton    _grbl_hatch_spacing;
+    UI::Widget::PrefCheckButton   _grbl_flip_y_canvas;
+    UI::Widget::PrefCheckButton   _grbl_align_origin;
+    UI::Widget::PrefCheckButton   _grbl_clip_bed;
+    UI::Widget::PrefSpinButton    _grbl_bed_width;
+    UI::Widget::PrefSpinButton    _grbl_bed_depth;
+    UI::Widget::PrefCheckButton   _grbl_auto_pause_layers;
+    UI::Widget::PrefCheckButton   _grbl_manual_pen_change;
+    UI::Widget::PrefCheckButton   _grbl_pen_change_home;
+    UI::Widget::PrefCheckButton   _grbl_pen_change_prompt;
+    UI::Widget::PrefSpinButton    _grbl_layer_pause_dwell;
 
     Gtk::ComboBoxText   _cms_display_profile;
     UI::Widget::PrefCheckButton     _cms_from_user;

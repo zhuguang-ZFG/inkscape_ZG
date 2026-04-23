@@ -63,6 +63,7 @@
 #include "selection.h"
 #include "path-prefix.h"            // Data directory
 
+#include "actions/actions-axidraw.h"
 #include "actions/actions-base.h"
 #include "actions/actions-dialogs.h"
 #include "actions/actions-edit.h"
@@ -598,6 +599,7 @@ InkscapeApplication::InkscapeApplication()
 
     // ======================== Actions =========================
     add_actions_base(this);                 // actions that are GUI independent
+    add_actions_axidraw(this);              // native GRBL / AxiDraw plotter (in-tree)
     add_actions_edit(this);                 // actions for editing
     add_actions_effect(this);               // actions for Filters and Extensions
     add_actions_element_a(this);            // actions for the SVG a (anchor) element

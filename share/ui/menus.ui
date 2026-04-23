@@ -1212,6 +1212,20 @@
           <attribute name="target">ExtensionsGallery</attribute>
           <attribute name="icon">dialog-extensions</attribute>
         </item>
+        <item>
+          <attribute name="label" translatable="yes">Send document to _GRBL plotter…</attribute>
+          <attribute name="action">app.axidraw-plot</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">E_xport GRBL G-code to file…</attribute>
+          <attribute name="action">app.axidraw-export-gcode</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">GRBL _control panel…</attribute>
+          <attribute name="action">win.dialog-open</attribute>
+          <attribute name="target">GrblControl</attribute>
+          <attribute name="icon">dialog-extensions</attribute>
+        </item>
       </section>
       <section id="effect-menu-effects"/>
       <section>

@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 target_sources(inkscape_base PRIVATE
+  actions-axidraw.h
+  actions-axidraw.cpp
   actions-effect-data.h
   actions-effect-data.cpp
   actions-extra-data.h

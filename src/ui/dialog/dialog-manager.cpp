@@ -225,7 +225,10 @@ void DialogManager::restore_dialogs_state(DialogContainer *docking_container, bo
 
     Inkscape::Preferences *prefs = Inkscape::Preferences::get();
     int save_state = prefs->getInt(save_dialog_position, PREFS_DIALOGS_STATE_SAVE);
-    if (save_state == PREFS_DIALOGS_STATE_NONE) return;
+    if (save_state == PREFS_DIALOGS_STATE_NONE) {
+        docking_container->new_dialog("GrblControl");
+        return;
+    }
 
     try {
         auto keyfile = Glib::KeyFile::create();
@@ -253,6 +256,9 @@ void DialogManager::restore_dialogs_state(DialogContainer *docking_container, bo
     } catch (Glib::Error const &error) {
         std::cerr << G_STRFUNC << ": dialogs state not loaded - " << error.what() << std::endl;
     }
+
+    // Keep GRBL control panel always open by default.
+    docking_container->new_dialog("GrblControl");
 }
 
 void DialogManager::remove_dialog_floating_state(const Glib::ustring& dialog_type) {

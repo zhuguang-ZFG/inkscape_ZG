@@ -11,6 +11,8 @@ For user-facing documentation, please refer to the [Inkscape website](https://in
 - [Compiling Inkscape](./building/readme.md)
 - [Style guide for developer documentation](./documentation_style.md)
 - [Developing Inkscape with Visual Studio Code on Windows](./vscode/readme.md)
+- Native GRBL / AxiDraw integration lives in `src/axidraw/`, with UI in `src/ui/dialog/grbl-control-panel.*`
+  and related preferences under Input/Output.
 
 
 

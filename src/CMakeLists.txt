@@ -215,6 +215,7 @@ target_sources(inkscape_base PRIVATE
 # -----------------------------------------------------------------------------
 
 add_subdirectory(actions)
+add_subdirectory(axidraw)
 add_subdirectory(async)
 add_subdirectory(colors)
 add_subdirectory(css)
@@ -346,6 +347,10 @@ target_link_libraries(inkscape_base
         ${INKSCAPE_LIBS}
         2Geom::2geom
 )
+
+if(WIN32)
+    target_link_libraries(inkscape_base PRIVATE ws2_32)
+endif()
 
 # Link inkscape and inkview against inkscape_base
 target_link_libraries(inkscape inkscape_base)

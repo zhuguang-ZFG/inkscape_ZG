@@ -29,6 +29,8 @@ processes.
 
 ## More information
 
+- Native GRBL/AxiDraw plotting support is available in-tree for serial pen plotter workflows, including
+  the GRBL control panel, machine-space preview, and direct "send to plotter" export.
 - [Download](https://inkscape.org/download)
 - [User Documentation](https://inkscape.org/learn/)
 - [Developer Documentation](doc/readme.md)
