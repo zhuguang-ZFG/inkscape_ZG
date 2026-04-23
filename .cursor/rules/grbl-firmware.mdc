@@ -1,0 +1,15 @@
+---
+description: GRBL 固件与主机逆向参考路径（固定）
+globs: src/axidraw/**,src/ui/dialog/grbl-control-panel.*
+alwaysApply: false
+---
+
+修改 GRBL 主机端（串流、`ok` 协议、Z/M3M5 笔控、层间暂停等）时，同时参考：
+
+- **固件检出路径（设备侧，已固定）：** `D:\GIT\inkscape-axidraw\Grbl_Esp32`
+- **逆向源码路径（主机侧，已固定）：** `D:\GIT\kxnx`
+- **参考仓库（主机/扩展实现，已固定）：** `D:\GIT\inkscape-axidraw`
+- **参考仓库（分支实现，已固定）：** `D:\GIT\inkscape_px`
+- **本仓库说明：** `src/axidraw/FIRMWARE.md`
+
+不要向用户重复索要上述路径；若路径在本机不同，只更新 `FIRMWARE.md` 与（必要时）本规则。
