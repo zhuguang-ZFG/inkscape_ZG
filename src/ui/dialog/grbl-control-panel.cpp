@@ -2439,13 +2439,12 @@ bool GrblControlPanel::build_document_preview_overlay(SPDocument *doc, SPDesktop
         return true;
     }
 
-    constexpr std::size_t k_preview_max_strokes = 12000;
     Geom::PathVector pv_doc;
     std::string err;
     std::size_t included = 0;
     std::size_t total = 0;
     if (!build_grbl_plot_preview_pathvector(doc, params, ctx, pv_doc, err, k_preview_max_strokes, &included, &total)) {
-        post_status(make_preview_build_error(err, false), true);
+        post_status(build_preview_build_error_status(err, false), true);
         return false;
     }
     if (pv_doc.empty()) {
@@ -2455,7 +2454,7 @@ bool GrblControlPanel::build_document_preview_overlay(SPDocument *doc, SPDesktop
     _plot_preview_overlay = make_canvasitem<CanvasItemBpath>(desktop->getCanvasTemp(),
                                                              transform_pathvector_to_desktop(pv_doc, affine), true);
     configure_preview_overlay(*_plot_preview_overlay, 0x22aaffcc, 1.0);
-    status_note = build_preview_status_note(false, included, total, false);
+    update_preview_status_note(status_note, false, included, total, false);
     return true;
 }
 
@@ -2468,7 +2467,6 @@ bool GrblControlPanel::build_machine_preview_overlay(SPDocument *doc, SPDesktop 
         return true;
     }
 
-    constexpr std::size_t k_preview_max_strokes = 12000;
     Geom::PathVector pv_m;
     std::string err_m;
     bool clip_approx = false;
@@ -2476,7 +2474,7 @@ bool GrblControlPanel::build_machine_preview_overlay(SPDocument *doc, SPDesktop 
     std::size_t tot_m = 0;
     if (!build_grbl_plot_machine_preview_pathvector_in_doc_space(doc, params, ctx, pv_m, err_m, &clip_approx, k_preview_max_strokes,
                                                                  &inc_m, &tot_m)) {
-        post_status(make_preview_build_error(err_m, true), true);
+        post_status(build_preview_build_error_status(err_m, true), true);
         return false;
     }
     if (pv_m.empty()) {
@@ -2486,7 +2484,7 @@ bool GrblControlPanel::build_machine_preview_overlay(SPDocument *doc, SPDesktop 
     _plot_preview_machine_overlay = make_canvasitem<CanvasItemBpath>(desktop->getCanvasTemp(),
                                                                      transform_pathvector_to_desktop(pv_m, affine), true);
     configure_preview_overlay(*_plot_preview_machine_overlay, 0xff8844cc, 1.25);
-    status_note = build_preview_status_note(true, inc_m, tot_m, clip_approx);
+    update_preview_status_note(status_note, true, inc_m, tot_m, clip_approx);
     return true;
 }
 
