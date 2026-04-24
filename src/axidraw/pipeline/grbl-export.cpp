@@ -832,6 +832,8 @@ static void fill_grbl_plot_stats_from_prep(PreparedPlotMm const &prep, GrblExpor
                                            GrblPlotStats &st)
 {
     st.stroke_count = prep.count_strokes();
+    st.layer_count = prep.layered ? prep.layers_mm.size() : (prep.flat_mm.empty() ? 0 : 1);
+    st.tool_change_count = 0;
     st.has_bounds_mm = false;
     double minx = std::numeric_limits<double>::infinity();
     double miny = std::numeric_limits<double>::infinity();
@@ -867,6 +869,38 @@ static void fill_grbl_plot_stats_from_prep(PreparedPlotMm const &prep, GrblExpor
         st.max_y_mm = maxy;
     }
     fill_grbl_plot_lengths_from_prep(prep, params, st);
+    if (prep.layered && prep.layers_mm.size() > 1 && params.enable_layer_tool_change_m6) {
+        int active_tool = -1;
+        for (std::size_t li = 0; li < prep.layers_mm.size(); ++li) {
+            int const next_tool = li < prep.layer_tool_ids.size() ? prep.layer_tool_ids[li] : -1;
+            bool const needs_tool_change =
+                li > 0 && next_tool >= 0 && next_tool != active_tool;
+            if (needs_tool_change) {
+                ++st.tool_change_count;
+            }
+            if (next_tool >= 0) {
+                active_tool = next_tool;
+            }
+        }
+    }
+    double duration_sec = 0.0;
+    if (params.feed_draw_mm_min > 1e-9) {
+        duration_sec += (st.draw_length_mm / params.feed_draw_mm_min) * 60.0;
+    }
+    if (params.feed_travel_mm_min > 1e-9) {
+        duration_sec += (st.travel_length_mm / params.feed_travel_mm_min) * 60.0;
+    }
+    if (prep.layered && st.layer_count > 1) {
+        std::size_t const pauses = st.layer_count - 1;
+        if (params.manual_pen_change) {
+            duration_sec += static_cast<double>(pauses) * 12.0;
+        } else if (params.enable_layer_tool_change_m6) {
+            duration_sec += static_cast<double>(st.tool_change_count) * 8.0;
+        } else if (params.auto_layer_pause_dwell_sec > 1e-9) {
+            duration_sec += static_cast<double>(pauses) * params.auto_layer_pause_dwell_sec;
+        }
+    }
+    st.estimated_duration_sec = duration_sec;
 }
 
 static bool wants_layered_pause(GrblExportParams const &params, GrblExportContext const &ctx)
@@ -1110,6 +1144,24 @@ static bool validate_layer_tool_ids_for_m6(PreparedPlotMm const &prep, std::stri
     return false;
 }
 
+static std::string build_empty_after_mapping_message(GrblExportParams const &params)
+{
+    std::ostringstream msg;
+    msg << _("按当前坐标映射与床面裁剪设置，图稿最终没有任何可绘制笔画。");
+    msg << " ";
+    msg << _("常见原因：开启了“限制在机器床面内”，但图稿经过交换轴、反转、页面 Y 镜像或原点对齐后，整体落在床面范围之外。");
+    if (params.clip_to_machine_bed) {
+        std::ostringstream dims;
+        dims << std::fixed << std::setprecision(1) << params.machine_bed_width_mm << " x "
+             << params.machine_bed_depth_mm;
+        msg << " ";
+        msg << Glib::ustring::compose(_("当前床面尺寸：%1 mm。"), Glib::ustring(dims.str())).raw();
+    }
+    msg << " ";
+    msg << _("建议先尝试：关闭“限制在机器床面内”，或开启“左下角对齐到机器原点”，再检查交换 X/Y、反转 X/Y、页面 Y 镜像是否设置正确。");
+    return msg.str();
+}
+
 static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &params, GrblExportContext const &ctx,
                                   PreparedPlotMm &prep, std::string &err_out)
 {
@@ -1184,7 +1236,7 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
             }
             prune_empty_layers(prep.layers_mm, &prep.layer_tool_ids, &prep.layer_labels);
             if (prep.layers_mm.empty()) {
-                err_out = _("Nothing remains to plot after coordinate mapping or machine-bed clipping.");
+                err_out = build_empty_after_mapping_message(params);
                 return false;
             }
             if (params.enable_layer_tool_change_m6 && !validate_layer_tool_ids_for_m6(prep, err_out)) {
@@ -1260,7 +1312,7 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     }
 
     if (prep.flat_mm.empty()) {
-        err_out = _("Nothing remains to plot after coordinate mapping or machine-bed clipping.");
+        err_out = build_empty_after_mapping_message(params);
         return false;
     }
 
@@ -1698,6 +1750,29 @@ bool export_paths_to_grbl(SerialPort &port, SPDocument *doc, GrblExportParams co
 
     return emit_grbl_program_dispatch(&port, nullptr, std::numeric_limits<std::size_t>::max(), prep, params, ctx,
                                        err_out);
+}
+
+bool analyze_grbl_plot(SPDocument *doc, GrblExportParams const &params, GrblExportContext const &ctx,
+                       GrblPlotStats &stats_out, std::string &err_out)
+{
+    err_out.clear();
+    stats_out = {};
+    if (!doc) {
+        err_out = _("Invalid document.");
+        return false;
+    }
+    if (ctx.cancel && ctx.cancel->load()) {
+        err_out = grbl_error_user_cancelled();
+        return false;
+    }
+
+    PreparedPlotMm prep;
+    if (!fill_prepared_plot_mm(doc, params, ctx, prep, err_out)) {
+        return false;
+    }
+
+    fill_grbl_plot_stats_from_prep(prep, params, stats_out);
+    return true;
 }
 
 void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExportParams &params)

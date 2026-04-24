@@ -142,6 +142,8 @@ struct GrblExportContext {
 /** Populated by export_paths_to_grbl / build_grbl_plot_gcode_string when @a stats_out is non-null (machine mm). */
 struct GrblPlotStats {
     std::size_t stroke_count = 0;
+    std::size_t layer_count = 0;
+    std::size_t tool_change_count = 0;
     bool has_bounds_mm = false;
     double min_x_mm = 0;
     double min_y_mm = 0;
@@ -150,6 +152,7 @@ struct GrblPlotStats {
     bool has_length_stats = false;
     double draw_length_mm = 0;
     double travel_length_mm = 0;
+    double estimated_duration_sec = 0;
 };
 
 /**
@@ -162,6 +165,10 @@ bool export_paths_to_grbl(SerialPort &port, SPDocument *doc, GrblExportParams co
 
 /** Fill @a params from `/options/grbl/...` keys (feeds, pen mode, flatness, stroke order, bed clip, etc.). */
 void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExportParams &params);
+
+/** Prepare geometry and fill @a stats_out without generating or streaming G-code. */
+bool analyze_grbl_plot(SPDocument *doc, GrblExportParams const &params, GrblExportContext const &ctx,
+                       GrblPlotStats &stats_out, std::string &err_out);
 
 /**
  * Build the same G-code program that export_paths_to_grbl would stream (including G21/G90),

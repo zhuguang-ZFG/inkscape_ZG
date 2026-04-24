@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <iomanip>
 #include <sstream>
@@ -47,15 +48,23 @@
 #include "axidraw/device/tcp-port.h"
 #include "axidraw/pipeline/grbl-export.h"
 #include "desktop.h"
+#include "display/control/canvas-item-text.h"
 #include "document.h"
+#include "document-undo.h"
 #include "io/sys.h"
+#include "object/sp-namedview.h"
+#include "object/sp-root.h"
+#include "page-manager.h"
 #include "preferences.h"
 #include "style-enums.h"
 #include "ui/dialog/choose-file-utils.h"
 #include "ui/dialog/choose-file.h"
 #include "ui/dialog-run.h"
 #include "ui/pack.h"
+#include "ui/widget/canvas.h"
 #include "util/scope_exit.h"
+#include "util/units.h"
+#include "xml/node.h"
 
 using Inkscape::Axidraw::grbl_begin_plot_waits;
 using Inkscape::Axidraw::grbl_end_plot_waits;
@@ -64,15 +73,70 @@ using Inkscape::Axidraw::build_grbl_plot_gcode_string;
 using Inkscape::Axidraw::build_grbl_plot_machine_preview_pathvector_in_doc_space;
 using Inkscape::Axidraw::build_grbl_plot_preview_pathvector;
 using Inkscape::Axidraw::GrblPlotStats;
+using Inkscape::Axidraw::analyze_grbl_plot;
 using Inkscape::Axidraw::export_paths_to_grbl;
 using Inkscape::Axidraw::grbl_export_params_from_preferences;
 using Inkscape::Axidraw::grbl_send_line;
 using Inkscape::Axidraw::SerialPort;
 using Inkscape::CanvasItemBpath;
+using Inkscape::CanvasItemText;
 using Inkscape::choose_file_open;
 using Inkscape::choose_file_save;
 
 namespace {
+
+void append_axis_arrow(Geom::PathVector &paths, Geom::Point const &from, Geom::Point const &to, double head_len, double head_width)
+{
+    Geom::Path shaft(from);
+    shaft.appendNew<Geom::LineSegment>(to);
+    paths.push_back(shaft);
+    auto const dx = to[Geom::X] - from[Geom::X];
+    auto const dy = to[Geom::Y] - from[Geom::Y];
+    auto const len = std::hypot(dx, dy);
+    if (len > 1e-6) {
+        Geom::Point const dir(dx / len, dy / len);
+        Geom::Point const normal(-dir[Geom::Y], dir[Geom::X]);
+        Geom::Point const base = to - dir * head_len;
+        Geom::Path left(base + normal * head_width);
+        left.appendNew<Geom::LineSegment>(to);
+        paths.push_back(left);
+        Geom::Path right(base - normal * head_width);
+        right.appendNew<Geom::LineSegment>(to);
+        paths.push_back(right);
+    }
+}
+
+Geom::Point machine_axis_direction(bool swap_xy, bool invert_x, bool invert_y, bool x_axis)
+{
+    if (!swap_xy) {
+        return x_axis
+            ? Geom::Point(invert_x ? -1.0 : 1.0, 0.0)
+            : Geom::Point(0.0, invert_y ? -1.0 : 1.0);
+    }
+    return x_axis
+        ? Geom::Point(0.0, invert_x ? -1.0 : 1.0)
+        : Geom::Point(invert_y ? -1.0 : 1.0, 0.0);
+}
+
+Glib::ustring format_duration_compact(double seconds)
+{
+    if (!(seconds > 0.0)) {
+        return _("未估算");
+    }
+    auto const rounded = static_cast<long long>(std::llround(seconds));
+    long long const hours = rounded / 3600;
+    long long const minutes = (rounded % 3600) / 60;
+    long long const secs = rounded % 60;
+    std::ostringstream out;
+    if (hours > 0) {
+        out << hours << _("小时");
+    }
+    if (minutes > 0 || hours > 0) {
+        out << minutes << _("分");
+    }
+    out << secs << _("秒");
+    return out.str();
+}
 
 void trim_in_place(std::string &s)
 {
@@ -168,7 +232,7 @@ constexpr auto k_pref_pen_control = "/options/grbl/pen-control";
 constexpr auto k_pref_pen_up = "/options/grbl/pen-up-cmd";
 constexpr auto k_pref_pen_down = "/options/grbl/pen-down-cmd";
 constexpr auto k_pref_limit_layer = "/options/grbl/limit-to-current-layer";
-constexpr auto k_pref_autoprobe_connect = "/options/grbl/auto-probe-connect-on-startup";
+constexpr auto k_pref_sync_page_to_bed = "/options/grbl/sync-page-to-bed-on-firmware-read";
 constexpr auto k_pref_net_host = "/options/grbl/net-host";
 constexpr auto k_pref_net_port = "/options/grbl/net-port";
 constexpr auto k_pref_swap_xy = "/options/grbl/swap-xy";
@@ -196,6 +260,241 @@ constexpr auto k_pref_tool_change_x = "/options/grbl/tool-change-x-mm";
 constexpr auto k_pref_tool_change_y = "/options/grbl/tool-change-y-mm";
 constexpr auto k_pref_start_gcode = "/options/grbl/start-gcode";
 constexpr auto k_pref_end_gcode = "/options/grbl/end-gcode";
+
+Inkscape::Axidraw::GrblExportParams make_export_params_from_preferences()
+{
+    auto *prefs = Inkscape::Preferences::get();
+    Inkscape::Axidraw::GrblExportParams params;
+    grbl_export_params_from_preferences(prefs, params);
+    return params;
+}
+
+Inkscape::Axidraw::GrblExportContext make_export_context(Inkscape::UI::Dialog::GrblControlPanel &panel, SPDesktop *desktop)
+{
+    auto *prefs = Inkscape::Preferences::get();
+    Inkscape::Axidraw::GrblExportContext ctx;
+    ctx.desktop = desktop;
+    ctx.selection = desktop ? desktop->getSelection() : nullptr;
+    ctx.use_current_layer_without_selection = prefs->getBool(k_pref_limit_layer, false);
+    ctx.cancel = nullptr;
+    return ctx;
+}
+
+bool get_document_content_bounds(SPDocument *doc, Geom::Rect &bounds, Glib::ustring &error,
+                                 Glib::ustring const &empty_message)
+{
+    if (!doc) {
+        error = _("没有活动文档。");
+        return false;
+    }
+    auto bounds_opt = doc->preferredBounds();
+    if (!bounds_opt) {
+        error = empty_message;
+        return false;
+    }
+    bounds = *bounds_opt;
+    if (!(bounds.width() > 1e-9) || !(bounds.height() > 1e-9)) {
+        error = _("当前文档没有有效的绘图范围。");
+        return false;
+    }
+    return true;
+}
+
+bool get_bed_size_in_document_units(SPDocument *doc, double bed_width_mm, double bed_height_mm,
+                                    double &bed_w_doc, double &bed_h_doc)
+{
+    if (!doc) {
+        return false;
+    }
+    auto const &unit_table = Inkscape::Util::UnitTable::get();
+    auto *doc_unit = doc->getDisplayUnit();
+    if (!doc_unit) {
+        doc_unit = unit_table.getUnit("px");
+    }
+    auto *mm = unit_table.getUnit("mm");
+    bed_w_doc = Inkscape::Util::Quantity::convert(bed_width_mm, mm, doc_unit);
+    bed_h_doc = Inkscape::Util::Quantity::convert(bed_height_mm, mm, doc_unit);
+    return bed_w_doc > 1e-9 && bed_h_doc > 1e-9;
+}
+
+struct LayoutScaleMetrics
+{
+    double content_w_doc = 0.0;
+    double content_h_doc = 0.0;
+    double content_w_mm = 0.0;
+    double content_h_mm = 0.0;
+    double bed_w_mm = 0.0;
+    double bed_h_mm = 0.0;
+    double fit_scale = 0.0;
+    double fill_x_pct = 0.0;
+    double fill_y_pct = 0.0;
+    bool fits_without_scaling = false;
+};
+
+bool get_layout_scale_metrics_from_bounds_mm(double content_w_mm, double content_h_mm, double bed_width_mm,
+                                             double bed_height_mm, LayoutScaleMetrics &metrics, Glib::ustring &error)
+{
+    if (!(content_w_mm > 1e-9) || !(content_h_mm > 1e-9)) {
+        error = _("当前文档没有有效的绘图范围。");
+        return false;
+    }
+    if (!(bed_width_mm > 1e-9) || !(bed_height_mm > 1e-9)) {
+        error = _("机器行程无效，请先同步或设置床面宽度/深度。");
+        return false;
+    }
+
+    metrics.content_w_mm = content_w_mm;
+    metrics.content_h_mm = content_h_mm;
+    metrics.bed_w_mm = bed_width_mm;
+    metrics.bed_h_mm = bed_height_mm;
+    metrics.fit_scale = std::min(bed_width_mm / content_w_mm, bed_height_mm / content_h_mm);
+    metrics.fill_x_pct = (content_w_mm / bed_width_mm) * 100.0;
+    metrics.fill_y_pct = (content_h_mm / bed_height_mm) * 100.0;
+    metrics.fits_without_scaling = metrics.fit_scale >= 0.999999;
+    return true;
+}
+
+bool get_layout_scale_metrics(SPDocument *doc, double bed_width_mm, double bed_height_mm, LayoutScaleMetrics &metrics,
+                              Glib::ustring &error, Glib::ustring const &empty_message)
+{
+    Geom::Rect bounds;
+    if (!get_document_content_bounds(doc, bounds, error, empty_message)) {
+        return false;
+    }
+
+    double bed_w_doc = 0.0;
+    double bed_h_doc = 0.0;
+    if (!get_bed_size_in_document_units(doc, bed_width_mm, bed_height_mm, bed_w_doc, bed_h_doc)) {
+        error = _("机器行程无效，请先同步或设置床面宽度/深度。");
+        return false;
+    }
+
+    auto const &unit_table = Inkscape::Util::UnitTable::get();
+    auto *doc_unit = doc->getDisplayUnit();
+    if (!doc_unit) {
+        doc_unit = unit_table.getUnit("px");
+    }
+    auto *mm = unit_table.getUnit("mm");
+
+    metrics.content_w_doc = bounds.width();
+    metrics.content_h_doc = bounds.height();
+    return get_layout_scale_metrics_from_bounds_mm(Inkscape::Util::Quantity::convert(metrics.content_w_doc, doc_unit, mm),
+                                                   Inkscape::Util::Quantity::convert(metrics.content_h_doc, doc_unit, mm),
+                                                   bed_width_mm, bed_height_mm, metrics, error);
+}
+
+void setup_summary_label(Gtk::Label &label, Glib::ustring const &initial_markup, int margin_top, int margin_bottom)
+{
+    label.set_halign(Gtk::Align::START);
+    label.set_wrap(true);
+    label.set_use_markup(true);
+    label.set_selectable(true);
+    label.set_xalign(0.0f);
+    label.add_css_class("monospace");
+    label.set_margin_top(margin_top);
+    label.set_margin_bottom(margin_bottom);
+    label.set_markup(initial_markup);
+}
+
+bool get_document_bounds_and_bed(SPDocument *doc, double bed_width_mm, double bed_height_mm, Geom::Rect &bounds,
+                                 double &bed_w_doc, double &bed_h_doc, Glib::ustring &error,
+                                 Glib::ustring const &empty_message)
+{
+    if (!get_document_content_bounds(doc, bounds, error, empty_message)) {
+        return false;
+    }
+    if (!get_bed_size_in_document_units(doc, bed_width_mm, bed_height_mm, bed_w_doc, bed_h_doc)) {
+        error = _("机器行程无效，请先同步或设置床面宽度/深度。");
+        return false;
+    }
+    return true;
+}
+
+Glib::ustring make_preview_build_error(std::string const &err, bool machine_space)
+{
+    if (!err.empty()) {
+        return Glib::ustring(err);
+    }
+    return machine_space ? Glib::ustring(_("无法生成机器空间预览。")) : Glib::ustring(_("无法生成文档空间预览。"));
+}
+
+Glib::ustring make_preview_summary(bool machine_space, std::size_t included, std::size_t total, bool clip_approx)
+{
+    if (!machine_space) {
+        return Glib::ustring::compose(
+            _("文档空间预览仅显示了 %1 / %2 段路径；如果图稿过于复杂，请简化图稿或关闭该预览。"),
+            static_cast<guint64>(included), static_cast<guint64>(total));
+    }
+    if (clip_approx && total > included) {
+        return Glib::ustring::compose(
+            _("机器空间预览仅显示了 %1 / %2 段路径；被机器床面裁切的部分会以近似方式显示。"),
+            static_cast<guint64>(included), static_cast<guint64>(total));
+    }
+    if (clip_approx) {
+        return _("机器空间预览中，被机器床面裁切的部分会以近似方式显示。");
+    }
+    return Glib::ustring::compose(
+        _("机器空间预览仅显示了 %1 / %2 段路径；如果图稿过于复杂，请简化图稿以查看全部结果。"),
+        static_cast<guint64>(included), static_cast<guint64>(total));
+}
+
+Glib::ustring make_fill_gcode_status(std::size_t strokes, Inkscape::Axidraw::GrblPlotStats const &stats)
+{
+    if (stats.has_bounds_mm) {
+        std::ostringstream wxh;
+        wxh << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm) << " x "
+            << (stats.max_y_mm - stats.min_y_mm);
+        if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
+            double const total = stats.draw_length_mm + stats.travel_length_mm;
+            double const air = (stats.travel_length_mm / total) * 100.0;
+            std::ostringstream lengths;
+            lengths << std::fixed << std::setprecision(1) << stats.draw_length_mm << " / " << stats.travel_length_mm;
+            std::ostringstream ratio;
+            ratio << std::fixed << std::setprecision(1) << air;
+            return Glib::ustring::compose(
+                _("编辑器已填入 %1 条笔画，对应工作区域约 %2 mm，绘制/空走长度 %3 mm，空走占比 %4%%。请先检查，如有需要可“另存为 G-code”，然后再“发送到机器”。"),
+                static_cast<guint64>(strokes), Glib::ustring(wxh.str()), Glib::ustring(lengths.str()),
+                Glib::ustring(ratio.str()));
+        }
+        return Glib::ustring::compose(
+            _("编辑器已填入 %1 条笔画，对应工作区域约 %2 mm（按首选项换算后的机器坐标）。请先检查，如有需要可“另存为 G-code”，然后再“发送到机器”。"),
+            static_cast<guint64>(strokes), Glib::ustring(wxh.str()));
+    }
+    return Glib::ustring::compose(_("编辑器已为 %1 条笔画生成 G-code。请先检查内容，确认后再“发送到机器”。"),
+                                   static_cast<guint64>(strokes));
+}
+
+Glib::ustring make_direct_send_progress_status(std::size_t stroke_done, std::size_t stroke_total, std::size_t lines_sent,
+                                               std::size_t lines_est)
+{
+    if (lines_est > 0 && lines_sent > 0 && stroke_total > 0 && stroke_done > 0) {
+        return Glib::ustring::compose(_("正在发送：第 %1 / %2 条笔画，第 %3 / ~%4 行..."),
+                                      static_cast<guint64>(stroke_done), static_cast<guint64>(stroke_total),
+                                      static_cast<guint64>(lines_sent), static_cast<guint64>(lines_est));
+    }
+    if (lines_est > 0 && lines_sent > 0) {
+        return Glib::ustring::compose(_("正在发送：第 %1 / ~%2 行..."), static_cast<guint64>(lines_sent),
+                                      static_cast<guint64>(lines_est));
+    }
+    if (stroke_total > 0 && stroke_done > 0) {
+        return Glib::ustring::compose(_("正在发送：第 %1 / %2 条笔画..."), static_cast<guint64>(stroke_done),
+                                      static_cast<guint64>(stroke_total));
+    }
+    return {};
+}
+
+Glib::ustring make_direct_send_done_status(std::size_t strokes, Inkscape::Axidraw::GrblPlotStats const &stats)
+{
+    if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
+        double const total = stats.draw_length_mm + stats.travel_length_mm;
+        double const air = (stats.travel_length_mm / total) * 100.0;
+        std::ostringstream ratio;
+        ratio << std::fixed << std::setprecision(1) << air;
+        return Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画，空走占比约 %2%%。"),
+                                      static_cast<guint64>(strokes), Glib::ustring(ratio.str()));
+    }
+    return Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画。"), static_cast<guint64>(strokes));
+}
 /// Last folder for G-code save/open dialogs in this panel.
 constexpr auto k_pref_save_gcode_dir = "/dialogs/grblcontrol/save_gcode_dir";
 constexpr std::size_t k_max_gcode_editor_bytes = 32u * 1024u * 1024u;
@@ -281,24 +580,6 @@ Glib::ustring build_firmware_snapshot_text(std::vector<std::string> const &info_
     return text.empty() ? Glib::ustring(_("尚未读取固件参数。")) : Glib::ustring(text);
 }
 
-int auto_probe_port_priority(std::string const &port)
-{
-    // Lower is better. Prefer common USB serial adapters first.
-    if (port.find("ttyUSB") != std::string::npos || port.find("ttyACM") != std::string::npos ||
-        port.find("cu.usb") != std::string::npos || port.find("usbserial") != std::string::npos ||
-        port.find("usbmodem") != std::string::npos) {
-        return 0;
-    }
-    if (port.find("ttyAMA") != std::string::npos || port.find("COM") == 0) {
-        return 1;
-    }
-    if (port.find("rfcomm") != std::string::npos || port.find("bluetooth") != std::string::npos ||
-        port.find("Bluetooth") != std::string::npos || port.find("BTH") != std::string::npos) {
-        return 3;
-    }
-    return 2;
-}
-
 bool parse_tcp_device_spec(std::string const &spec, std::string &host_out, int &port_out)
 {
     std::string s = spec;
@@ -327,9 +608,9 @@ Glib::ustring describe_probe_failure_ui(Glib::ustring const &device, int baud,
 {
     if (probe.response_line.empty()) {
         return Glib::ustring::compose(
-            _("No GRBL response on %1 at %2 baud. Check the port, baud rate, and controller power."), device, baud);
+            _("在 %1（%2 波特）上没有收到 GRBL 响应。请检查串口、波特率以及控制器供电。"), device, baud);
     }
-    return Glib::ustring::compose(_("Port %1 answered at %2 baud, but not like a GRBL controller:\n%3"), device, baud,
+    return Glib::ustring::compose(_("串口 %1（%2 波特）已有响应，但看起来不像 GRBL 控制器：\n%3"), device, baud,
                                   Glib::ustring(probe.response_line));
 }
 
@@ -351,6 +632,8 @@ GrblControlPanel::GrblControlPanel()
     , _btn_pen_down(_("落笔(_D)"))
     , _btn_motors(_("电机休眠(_O)（$SLP）"))
     , _btn_clear_alarm(_("清除报警(_M)（$X）"))
+    , _btn_fit_to_bed(_("缩放到机器行程内"))
+    , _btn_center_to_bed(_("居中到机器行程"))
     , _btn_load_gcode(_("载入 G-code(_L)..."))
     , _btn_fill_from_drawing(_("从图稿填充(_D)"))
     , _btn_save_gcode(_("G-code 另存为(_A)..."))
@@ -361,6 +644,7 @@ GrblControlPanel::GrblControlPanel()
     , _chk_canvas_plot_preview(_("文档空间预览(_V)"))
     , _chk_machine_space_preview(_("机器空间预览(_P)（mm -> 画布）"))
     , _chk_send_from_cursor_line(_("仅从光标所在行向下发送(_C)"))
+    , _chk_sync_page_to_bed(_("同步时把页面改成机器行程"))
     , _btn_read_firmware(_("同步绘图机参数"))
     , _btn_read_radio_mode(_("读取模式"))
     , _btn_apply_radio_mode(_("应用无线模式"))
@@ -391,20 +675,39 @@ void GrblControlPanel::on_map()
 {
     DialogBase::on_map();
     refresh_port_list();
-    maybe_auto_probe_and_connect();
+    refresh_plot_feedback(true);
     if (_btn_connect.get_active()) {
         ensure_machine_status_poll(true);
-    }
-    if (_chk_canvas_plot_preview.get_active() || _chk_machine_space_preview.get_active()) {
-        sync_plot_preview_overlay();
     }
 }
 
 void GrblControlPanel::on_unmap()
 {
     clear_plot_preview_overlay();
+    _plot_feedback_refresh_timer.disconnect();
+    _plot_feedback_refresh_preview_requested = false;
     ensure_machine_status_poll(false);
     DialogBase::on_unmap();
+}
+
+void GrblControlPanel::desktopReplaced()
+{
+    schedule_plot_feedback_refresh(true);
+}
+
+void GrblControlPanel::documentReplaced()
+{
+    schedule_plot_feedback_refresh(true);
+}
+
+void GrblControlPanel::selectionChanged(Inkscape::Selection * /*selection*/)
+{
+    schedule_plot_feedback_refresh(true);
+}
+
+void GrblControlPanel::selectionModified(Inkscape::Selection * /*selection*/, guint /*flags*/)
+{
+    schedule_plot_feedback_refresh(true);
 }
 
 void GrblControlPanel::post_status(Glib::ustring const &text, bool const is_error)
@@ -430,6 +733,7 @@ void GrblControlPanel::load_mapping_preferences_to_ui()
 {
     auto *prefs = Inkscape::Preferences::get();
     _suspend_mapping_sync = true;
+    _chk_sync_page_to_bed.set_active(prefs->getBool(k_pref_sync_page_to_bed, true));
     bool const auto_pause_between_layers = prefs->getBool(k_pref_auto_pause_between_layers, false);
     bool const manual_pen_change = prefs->getBool(k_pref_manual_pen_change, false);
     bool const tool_change_m6 = prefs->getBool(k_pref_tool_change_m6, false);
@@ -483,6 +787,7 @@ void GrblControlPanel::save_mapping_preferences_from_ui(bool const refresh_previ
     }
     auto *prefs = Inkscape::Preferences::get();
     prefs->setBool(k_pref_swap_xy, _chk_swap_xy.get_active());
+    prefs->setBool(k_pref_sync_page_to_bed, _chk_sync_page_to_bed.get_active());
     prefs->setBool(k_pref_invert_x, _chk_invert_x.get_active());
     prefs->setBool(k_pref_invert_y, _chk_invert_y.get_active());
     prefs->setBool(k_pref_flip_y, _chk_flip_y.get_active());
@@ -522,9 +827,7 @@ void GrblControlPanel::save_mapping_preferences_from_ui(bool const refresh_previ
     _near_connect_dist_spin.set_sensitive(_chk_near_connect.get_active());
     _sparse_keep_every_spin.set_sensitive(_chk_sparse_sampling.get_active());
     update_tool_change_mode_ui();
-    if (refresh_preview && (_chk_canvas_plot_preview.get_active() || _chk_machine_space_preview.get_active())) {
-        sync_plot_preview_overlay();
-    }
+    refresh_plot_feedback(refresh_preview);
 }
 
 void GrblControlPanel::update_tool_change_mode_ui()
@@ -539,6 +842,179 @@ void GrblControlPanel::update_tool_change_mode_ui()
     _chk_tool_change_point.set_sensitive(m6_mode);
     _tool_change_x_spin.set_sensitive(tool_change_point_sensitive);
     _tool_change_y_spin.set_sensitive(tool_change_point_sensitive);
+}
+
+void GrblControlPanel::refresh_job_summary()
+{
+    auto *doc = getDocument();
+    auto *desktop = getDesktop();
+    if (!doc || !desktop) {
+        _job_summary.set_markup(_("<b>任务概览</b>\n暂无活动文档。"));
+        refresh_layout_scale_summary();
+        return;
+    }
+
+    auto params = make_export_params_from_preferences();
+    auto ctx = make_export_context(*this, desktop);
+
+    GrblPlotStats stats{};
+    std::string err;
+    if (!analyze_grbl_plot(doc, params, ctx, stats, err)) {
+        auto const msg = err.empty() ? _("当前无法估算任务信息。") : Glib::ustring(err);
+        _job_summary.set_markup(
+            Glib::ustring::compose("<b>任务概览</b>\n%1", Glib::Markup::escape_text(msg)));
+        refresh_layout_scale_summary();
+        return;
+    }
+
+    std::ostringstream summary;
+    summary << "<b>任务概览</b>\n";
+    summary << _("图层数：") << stats.layer_count << _(" 个");
+    summary << "    " << _("笔画数：") << stats.stroke_count << _(" 条");
+    if (stats.tool_change_count > 0) {
+        summary << "    " << _("换笔：") << stats.tool_change_count << _(" 次");
+    }
+    summary << "\n" << _("预计时长：") << Glib::Markup::escape_text(format_duration_compact(stats.estimated_duration_sec));
+    if (stats.has_bounds_mm) {
+        summary << "    " << _("范围：");
+        summary << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm) << " x "
+                << (stats.max_y_mm - stats.min_y_mm) << " mm";
+    }
+    if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
+        double const total = stats.draw_length_mm + stats.travel_length_mm;
+        double const air = (stats.travel_length_mm / total) * 100.0;
+        summary << "\n" << _("落笔/空走：");
+        summary << std::fixed << std::setprecision(1) << stats.draw_length_mm << " / " << stats.travel_length_mm
+                << " mm";
+        summary << "    " << _("空走占比：") << std::fixed << std::setprecision(1) << air << "%";
+    }
+
+    LayoutScaleMetrics metrics;
+    Glib::ustring layout_error;
+    if (stats.has_bounds_mm &&
+        get_layout_scale_metrics_from_bounds_mm(stats.max_x_mm - stats.min_x_mm, stats.max_y_mm - stats.min_y_mm,
+                                                _bed_width_spin.get_value(), _bed_depth_spin.get_value(), metrics,
+                                                layout_error)) {
+        summary << "\n" << _("适配缩放：");
+        if (metrics.fits_without_scaling) {
+            summary << _("无需缩小");
+        } else {
+            summary << std::fixed << std::setprecision(1) << (metrics.fit_scale * 100.0) << "%";
+        }
+        summary << "    " << _("床面占用：X ");
+        summary << std::fixed << std::setprecision(1) << metrics.fill_x_pct << "%";
+        summary << " / Y " << std::fixed << std::setprecision(1) << metrics.fill_y_pct << "%";
+    }
+
+    _job_summary.set_markup(summary.str());
+    refresh_layout_scale_summary();
+}
+
+void GrblControlPanel::refresh_layout_scale_summary()
+{
+    auto *doc = getDocument();
+    auto *desktop = getDesktop();
+    if (!doc || !desktop) {
+        _layout_scale_summary.set_markup(_("<b>当前缩放</b>\n暂无活动文档。"));
+        return;
+    }
+
+    auto params = make_export_params_from_preferences();
+    auto ctx = make_export_context(*this, desktop);
+    GrblPlotStats stats{};
+    std::string err_text;
+    if (!analyze_grbl_plot(doc, params, ctx, stats, err_text)) {
+        auto const msg = err_text.empty() ? _("当前无法估算缩放信息。") : Glib::ustring(err_text);
+        _layout_scale_summary.set_markup(
+            Glib::ustring::compose("<b>当前缩放</b>\n%1", Glib::Markup::escape_text(msg)));
+        return;
+    }
+
+    LayoutScaleMetrics metrics;
+    Glib::ustring error;
+    if (!stats.has_bounds_mm ||
+        !get_layout_scale_metrics_from_bounds_mm(stats.max_x_mm - stats.min_x_mm, stats.max_y_mm - stats.min_y_mm,
+                                                 _bed_width_spin.get_value(), _bed_depth_spin.get_value(), metrics,
+                                                 error)) {
+        _layout_scale_summary.set_markup(
+            Glib::ustring::compose("<b>当前缩放</b>\n%1", Glib::Markup::escape_text(error)));
+        return;
+    }
+
+    std::ostringstream out;
+    out << "<b>当前缩放</b>\n";
+    out << _("图稿尺寸：") << std::fixed << std::setprecision(1) << metrics.content_w_mm << " x "
+        << metrics.content_h_mm << " mm";
+    out << "\n" << _("机器行程占用：X ") << std::fixed << std::setprecision(1) << metrics.fill_x_pct << "% / Y "
+        << metrics.fill_y_pct << "%";
+    out << "\n" << _("一键适配后比例：");
+    if (metrics.fits_without_scaling) {
+        double const enlarge_pct = metrics.fit_scale * 100.0;
+        out << _("当前已在行程内");
+        if (enlarge_pct > 100.1) {
+            out << "（" << _("若放大到铺满可达") << " " << std::fixed << std::setprecision(1) << enlarge_pct
+                << "%，当前按钮默认不放大）";
+        }
+    } else {
+        out << std::fixed << std::setprecision(1) << (metrics.fit_scale * 100.0) << "%";
+    }
+    _layout_scale_summary.set_markup(out.str());
+}
+
+bool GrblControlPanel::has_plot_preview_enabled() const
+{
+    return _chk_canvas_plot_preview.get_active() || _chk_machine_space_preview.get_active();
+}
+
+void GrblControlPanel::schedule_plot_feedback_refresh(bool const refresh_preview)
+{
+    if (refresh_preview) {
+        clear_plot_preview_overlay();
+    }
+    Glib::signal_idle().connect_once(sigc::track_object([this, refresh_preview] {
+        refresh_plot_feedback(refresh_preview);
+    }, *this));
+}
+
+void GrblControlPanel::refresh_plot_feedback(bool const refresh_preview)
+{
+    _plot_feedback_refresh_preview_requested = _plot_feedback_refresh_preview_requested || refresh_preview;
+    if (_plot_feedback_refresh_timer.connected()) {
+        return;
+    }
+    _plot_feedback_refresh_timer = Glib::signal_timeout().connect(sigc::track_object([this] {
+        bool const refresh_preview_now = _plot_feedback_refresh_preview_requested;
+        _plot_feedback_refresh_preview_requested = false;
+        _plot_feedback_refresh_timer.disconnect();
+        refresh_job_summary();
+        if (refresh_preview_now && has_plot_preview_enabled()) {
+            sync_plot_preview_overlay();
+        }
+        return false;
+    }, *this), 120);
+}
+
+bool GrblControlPanel::begin_gcode_stream_ui(Glib::ustring const &status)
+{
+    if (_gcode_sending.load()) {
+        return false;
+    }
+    _gcode_sending = true;
+    _gcode_cancel = false;
+    set_controls_sensitive_for_gcode_stream(false);
+    if (!status.empty()) {
+        post_status(status, false);
+    }
+    return true;
+}
+
+void GrblControlPanel::post_gcode_stream_result(std::string const &err)
+{
+    if (err == grbl_error_user_cancelled()) {
+        post_status(_("发送已停止（已取消）。"), false);
+    } else {
+        post_status(Glib::ustring(Inkscape::Axidraw::grbl_error_to_user_message(err)), true);
+    }
 }
 
 bool GrblControlPanel::link_is_open() const
@@ -619,6 +1095,9 @@ bool GrblControlPanel::on_machine_status_poll_timeout()
     if (_gcode_sending.load(std::memory_order_acquire)) {
         return true;
     }
+    if (_firmware_syncing.load(std::memory_order_acquire)) {
+        return true;
+    }
 
     std::thread([this] {
         std::unique_lock<std::mutex> lk(_port_mutex, std::try_to_lock);
@@ -684,122 +1163,6 @@ void GrblControlPanel::refresh_port_list()
     _suspend_port_combo = false;
 }
 
-void GrblControlPanel::maybe_auto_probe_and_connect()
-{
-    if (_auto_probe_attempted) {
-        return;
-    }
-    _auto_probe_attempted = true;
-
-    auto *prefs = Inkscape::Preferences::get();
-    if (!prefs->getBool(k_pref_autoprobe_connect, true)) {
-        return;
-    }
-    if (_btn_connect.get_active() || _connecting.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    Glib::ustring const pref_dev = prefs->getString(k_pref_device);
-    std::string pref_host;
-    int pref_port = 0;
-    if ((pref_dev.empty() && !prefs->getString(k_pref_net_host).empty())) {
-        pref_host = prefs->getString(k_pref_net_host).raw();
-        pref_port = prefs->getIntLimited(k_pref_net_port, 23, 1, 65535);
-    } else {
-        parse_tcp_device_spec(pref_dev.raw(), pref_host, pref_port);
-    }
-    if (!pref_host.empty() && pref_port > 0) {
-        std::string const pref_spec = pref_dev.empty() ? ("tcp://" + pref_host + ":" + std::to_string(pref_port))
-                                                       : pref_dev.raw();
-        post_status(Glib::ustring::compose(_("自动探测：正在通过 TCP 检查 %1..."), pref_spec), false);
-        std::thread([this, pref_dev = pref_spec, pref_host, pref_port] {
-            auto const probe = Inkscape::Axidraw::probe_grbl_tcp(pref_host, pref_port);
-            Glib::signal_idle().connect_once(sigc::track_object([this, pref = Glib::ustring(pref_dev), probe] {
-                if (!probe.ok) {
-                    post_status(_("自动探测无法连接到已配置的 TCP GRBL 端点。"), false);
-                    return;
-                }
-                if (_btn_connect.get_active() || _connecting.load(std::memory_order_acquire)) {
-                    return;
-                }
-                _suspend_port_combo = true;
-                _port_combo.set_active_id(pref);
-                if (_port_combo.get_active_id().empty()) {
-                    _port_combo.append(pref, pref);
-                    _port_combo.set_active_id(pref);
-                }
-                _suspend_port_combo = false;
-                post_status(Glib::ustring::compose(_("自动探测已匹配 %1；正在连接..."), pref), false);
-                _btn_connect.set_active(true);
-            }, *this));
-        }).detach();
-        return;
-    }
-
-    std::vector<std::string> ports = Inkscape::Axidraw::enumerate_serial_ports();
-    std::stable_sort(ports.begin(), ports.end(), [](std::string const &a, std::string const &b) {
-        int const pa = auto_probe_port_priority(a);
-        int const pb = auto_probe_port_priority(b);
-        if (pa != pb) {
-            return pa < pb;
-        }
-        return a < b;
-    });
-    std::vector<std::string> candidates;
-    candidates.reserve(ports.size() + 1);
-    if (!pref_dev.empty()) {
-        candidates.push_back(pref_dev.raw());
-    }
-    for (auto const &p : ports) {
-        if (pref_dev.empty() || p != pref_dev.raw()) {
-            candidates.push_back(p);
-        }
-    }
-    if (candidates.empty()) {
-        return;
-    }
-
-    int const baud = prefs->getIntLimited(k_pref_baud, 115200, 9600, 230400);
-    post_status(_("自动探测：正在扫描串口以查找 GRBL 控制器..."), false);
-    std::thread([this, candidates = std::move(candidates), baud]() mutable {
-        bool found = false;
-        std::string chosen;
-        for (auto const &dev : candidates) {
-            auto const probe = Inkscape::Axidraw::probe_grbl(dev, baud);
-            if (probe.ok) {
-                found = true;
-                chosen = dev;
-                break;
-            }
-        }
-
-        Glib::signal_idle().connect_once(sigc::track_object([this, found, chosen = Glib::ustring(chosen), baud] {
-            if (!found) {
-                post_status(_("自动探测未发现可连接的 GRBL 控制器。你可以手动选择端口后再连接。"),
-                            false);
-                return;
-            }
-            if (_btn_connect.get_active() || _connecting.load(std::memory_order_acquire)) {
-                return;
-            }
-
-            auto *prefs = Inkscape::Preferences::get();
-            _suspend_port_combo = true;
-            _port_combo.set_active_id(chosen);
-            if (_port_combo.get_active_id().empty()) {
-                _port_combo.append(chosen, chosen);
-                _port_combo.set_active_id(chosen);
-            }
-            _suspend_port_combo = false;
-            prefs->setString(k_pref_device, chosen);
-            prefs->save();
-            post_status(Glib::ustring::compose(_("自动探测已匹配 %1（%2 波特）；正在连接..."), chosen, baud),
-                        false);
-            _btn_connect.set_active(true);
-        }, *this));
-    }).detach();
-}
-
 void GrblControlPanel::on_port_combo_changed()
 {
     if (_suspend_port_combo) {
@@ -839,7 +1202,19 @@ void GrblControlPanel::run_action(std::function<void(std::string &)> work, bool 
 
 void GrblControlPanel::on_read_firmware_settings()
 {
+    if (_firmware_syncing.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    ensure_machine_status_poll(false);
     std::thread([this] {
+        scope_exit const finish_sync{[this] {
+            Glib::signal_idle().connect_once(sigc::track_object([this] {
+                _firmware_syncing.store(false, std::memory_order_release);
+                if (_btn_connect.get_active()) {
+                    ensure_machine_status_poll(true);
+                }
+            }, *this));
+        }};
         auto query_lines_locked = [this](std::string const &command, std::vector<std::string> &lines_out,
                                          std::string &err_out) -> bool {
             lines_out.clear();
@@ -953,8 +1328,48 @@ void GrblControlPanel::on_read_firmware_settings()
             }
             _suspend_mapping_sync = false;
 
+            bool page_synced = false;
+            bool unit_synced = false;
+            if (_chk_sync_page_to_bed.get_active() && snapshot.has_x_travel && snapshot.has_y_travel) {
+                if (auto *doc = getDocument()) {
+                    Inkscape::Util::Quantity const width(snapshot.x_travel_mm, "mm");
+                    Inkscape::Util::Quantity const height(snapshot.y_travel_mm, "mm");
+                    doc->setWidthAndHeight(width, height, true);
+                    auto &page_manager = doc->getPageManager();
+                    if (page_manager.hasPages()) {
+                        auto *page = page_manager.getSelected();
+                        if (!page) {
+                            page = page_manager.getFirstPage();
+                        }
+                        if (page) {
+                            page_manager.resizePage(page, width.value("px"), height.value("px"));
+                        }
+                    }
+                    if (auto *nv = doc->getNamedView()) {
+                        if (auto *repr = nv->getRepr()) {
+                            repr->setAttribute("inkscape:document-units", "mm");
+                            unit_synced = true;
+                        }
+                    }
+                    if (auto action = doc->getActionGroup()->lookup_action("set-display-unit")) {
+                        action->activate(Glib::Variant<Glib::ustring>::create("mm"));
+                    }
+                    doc->ensureUpToDate();
+                    if (auto *desk = getDesktop()) {
+                        if (auto *canvas = desk->getCanvas()) {
+                            canvas->queue_draw();
+                        }
+                    }
+                    doc->setModifiedSinceSave();
+                    Inkscape::DocumentUndo::done(doc, RC_("Undo", "按机器行程同步页面尺寸和单位"), "");
+                    page_synced = true;
+                }
+            }
+
             if (changed) {
                 save_mapping_preferences_from_ui(true);
+            } else {
+                refresh_plot_feedback(true);
             }
 
             std::vector<Glib::ustring> notes;
@@ -972,6 +1387,15 @@ void GrblControlPanel::on_read_firmware_settings()
                     dims = Glib::ustring::compose(_("已同步床面深度 Y=%1 mm"), snapshot.y_travel_mm);
                 }
                 notes.emplace_back(dims);
+            } else {
+                notes.emplace_back(_("未从固件读取到 $130 / $131 行程参数，因此没有同步页面尺寸。"));
+            }
+            if (page_synced) {
+                notes.emplace_back(
+                    Glib::ustring::compose(_("已将当前页面尺寸同步为 %1 x %2 mm"), snapshot.x_travel_mm, snapshot.y_travel_mm));
+            }
+            if (unit_synced) {
+                notes.emplace_back(_("已将文档单位同步为 mm"));
             }
             if (notes.empty()) {
                 post_status(_("已读取固件参数。"), false);
@@ -1044,11 +1468,25 @@ void GrblControlPanel::connect_toggle()
         post_status(Glib::ustring::compose(_("正在以 %2 波特探测 %1..."), device_for_thread, baud), false);
     }
 
-    // Run open on a worker to avoid blocking UI if driver stalls.
+    // Run open/probe on a worker to avoid blocking UI if driver stalls.
     std::thread([this, device_for_thread, baud, use_tcp, tcp_host, tcp_port] {
-        auto const probe =
-            use_tcp ? Inkscape::Axidraw::probe_grbl_tcp(tcp_host, tcp_port)
-                    : Inkscape::Axidraw::probe_grbl(device_for_thread.raw(), baud);
+        auto port = std::make_unique<SerialPort>();
+        auto tcp = std::make_unique<Inkscape::Axidraw::TcpPort>();
+        bool const opened = use_tcp ? tcp->open(tcp_host, tcp_port) : port->open(device_for_thread.raw(), baud);
+        if (!opened) {
+            Glib::signal_idle().connect_once(sigc::track_object([this] {
+                _connecting.store(false, std::memory_order_release);
+                update_connection_controls();
+                if (!_btn_connect.get_active()) {
+                    return;
+                }
+                _btn_connect.set_active(false);
+                post_status(_("无法打开所选连接。"), true);
+            }, *this));
+            return;
+        }
+
+        auto const probe = use_tcp ? Inkscape::Axidraw::probe_open_grbl(*tcp) : Inkscape::Axidraw::probe_open_grbl(*port);
         if (!probe.ok) {
             Glib::signal_idle().connect_once(sigc::track_object([this, probe, baud, dev = Glib::ustring(device_for_thread)] {
                 _connecting.store(false, std::memory_order_release);
@@ -1070,37 +1508,6 @@ void GrblControlPanel::connect_toggle()
                 post_machine_status({});
             }, *this));
             return;
-        }
-
-        auto port = std::make_unique<SerialPort>();
-        auto tcp = std::make_unique<Inkscape::Axidraw::TcpPort>();
-        bool const opened = use_tcp ? tcp->open(tcp_host, tcp_port) : port->open(device_for_thread.raw(), baud);
-        if (!opened) {
-            Glib::signal_idle().connect_once(sigc::track_object([this] {
-                _connecting.store(false, std::memory_order_release);
-                update_connection_controls();
-                if (!_btn_connect.get_active()) {
-                    return;
-                }
-                _btn_connect.set_active(false);
-                post_status(_("无法打开所选连接。"), true);
-            }, *this));
-            return;
-        }
-        if (use_tcp) {
-            tcp->purge_io();
-        } else {
-            port->purge_io();
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(150));
-        {
-            std::string junk;
-            for (int n = 0; n < 20; n++) {
-                bool const got = use_tcp ? tcp->read_line(junk, 25) : port->read_line(junk, 25);
-                if (!got) {
-                    break;
-                }
-            }
         }
 
         std::lock_guard guard(_port_mutex);
@@ -1129,6 +1536,11 @@ void GrblControlPanel::connect_toggle()
             }
             ensure_machine_status_poll(true);
             on_read_firmware_settings();
+            Glib::signal_timeout().connect_once(sigc::track_object([this] {
+                if (_btn_connect.get_active() && !_connecting.load(std::memory_order_acquire)) {
+                    on_read_firmware_settings();
+                }
+            }, *this), 1200);
         }, *this));
     }).detach();
 }
@@ -1232,6 +1644,83 @@ void GrblControlPanel::send_pen_state(bool const up)
     });
 }
 
+void GrblControlPanel::on_fit_document_to_bed()
+{
+    if (_gcode_sending.load()) {
+        return;
+    }
+
+    auto *doc = getDocument();
+    Geom::Rect bounds;
+    double bed_w_doc = 0.0;
+    double bed_h_doc = 0.0;
+    Glib::ustring error;
+    if (!get_document_bounds_and_bed(doc, _bed_width_spin.get_value(), _bed_depth_spin.get_value(), bounds, bed_w_doc,
+                                     bed_h_doc, error, _("当前文档没有可缩放的绘图内容。"))) {
+        post_status(error, true);
+        return;
+    }
+
+    double const content_w = bounds.width();
+    double const content_h = bounds.height();
+    double scale = std::min(bed_w_doc / content_w, bed_h_doc / content_h);
+    if (!(scale > 0.0)) {
+        post_status(_("无法计算缩放比例。"), true);
+        return;
+    }
+    if (scale > 1.0) {
+        scale = 1.0;
+    }
+
+    if (scale < 0.999999) {
+        doc->getRoot()->scaleChildItemsRec(Geom::Scale(scale), bounds.min(), false);
+    }
+    doc->getRoot()->translateChildItems(Geom::Translate(-bounds.min()[Geom::X], -bounds.min()[Geom::Y]));
+    doc->setModifiedSinceSave();
+    Inkscape::DocumentUndo::done(doc, RC_("Undo", "按机器行程缩放图稿"), "");
+
+    refresh_plot_feedback(true);
+
+    std::ostringstream msg;
+    if (scale < 0.999999) {
+        msg << _("已将图稿等比缩小并移动到机器行程内。缩放比例 ");
+        msg << std::fixed << std::setprecision(1) << (scale * 100.0) << "%。";
+    } else {
+        msg << _("图稿本身已小于机器行程，已仅将其移动到机器原点范围内。");
+    }
+    post_status(Glib::ustring(msg.str()), false);
+}
+
+void GrblControlPanel::on_center_document_to_bed()
+{
+    if (_gcode_sending.load()) {
+        return;
+    }
+
+    auto *doc = getDocument();
+    Geom::Rect bounds;
+    double bed_w_doc = 0.0;
+    double bed_h_doc = 0.0;
+    Glib::ustring error;
+    if (!get_document_bounds_and_bed(doc, _bed_width_spin.get_value(), _bed_depth_spin.get_value(), bounds, bed_w_doc,
+                                     bed_h_doc, error, _("当前文档没有可居中的绘图内容。"))) {
+        post_status(error, true);
+        return;
+    }
+
+    double const content_w = bounds.width();
+    double const content_h = bounds.height();
+    double const dx = ((bed_w_doc - content_w) * 0.5) - bounds.min()[Geom::X];
+    double const dy = ((bed_h_doc - content_h) * 0.5) - bounds.min()[Geom::Y];
+    doc->getRoot()->translateChildItems(Geom::Translate(dx, dy));
+    doc->setModifiedSinceSave();
+    Inkscape::DocumentUndo::done(doc, RC_("Undo", "按机器行程居中图稿"), "");
+
+    refresh_plot_feedback(true);
+
+    post_status(_("已将图稿整体居中到机器行程范围内。"), false);
+}
+
 void GrblControlPanel::update_connection_controls()
 {
     bool const connecting = _connecting.load(std::memory_order_acquire);
@@ -1264,7 +1753,7 @@ void GrblControlPanel::set_controls_sensitive_for_gcode_stream(bool const allow_
     _btn_send_gcode.set_sensitive(allow_interaction);
     _btn_cancel_gcode.set_sensitive(!allow_interaction);
     for (auto *b : {&_btn_mech_home, &_btn_yp, &_btn_set_origin, &_btn_xm, &_btn_goto_work_zero, &_btn_xp, &_btn_reset, &_btn_ym,
-                    &_btn_pen_up, &_btn_pen_down, &_btn_motors, &_btn_clear_alarm}) {
+                    &_btn_pen_up, &_btn_pen_down, &_btn_motors, &_btn_clear_alarm, &_btn_fit_to_bed, &_btn_center_to_bed}) {
         b->set_sensitive(allow_interaction);
     }
     _jog_dist.set_sensitive(allow_interaction);
@@ -1289,6 +1778,10 @@ void GrblControlPanel::clear_plot_preview_overlay()
 {
     _plot_preview_overlay.reset();
     _plot_preview_machine_overlay.reset();
+    _plot_preview_machine_axis_overlay.reset();
+    _plot_preview_axis_origin_label.reset();
+    _plot_preview_axis_x_label.reset();
+    _plot_preview_axis_y_label.reset();
 }
 
 void GrblControlPanel::sync_plot_preview_overlay()
@@ -1302,14 +1795,8 @@ void GrblControlPanel::sync_plot_preview_overlay()
     if (!desk || !doc) {
         return;
     }
-    auto *prefs = Inkscape::Preferences::get();
-    Inkscape::Axidraw::GrblExportParams params;
-    grbl_export_params_from_preferences(prefs, params);
-    Inkscape::Axidraw::GrblExportContext ctx;
-    ctx.desktop = desk;
-    ctx.selection = getSelection();
-    ctx.use_current_layer_without_selection = prefs->getBool(k_pref_limit_layer, false);
-    ctx.cancel = nullptr;
+    auto params = make_export_params_from_preferences();
+    auto ctx = make_export_context(*this, desk);
 
     constexpr std::size_t k_preview_max_strokes = 12000;
     Geom::Affine const aff = desk->doc2dt();
@@ -1322,7 +1809,7 @@ void GrblControlPanel::sync_plot_preview_overlay()
         std::size_t total = 0;
         if (!build_grbl_plot_preview_pathvector(doc, params, ctx, pv_doc, err, k_preview_max_strokes, &included,
                                                 &total)) {
-            post_status(err.empty() ? Glib::ustring(_("Could not build plot preview.")) : Glib::ustring(err), true);
+            post_status(make_preview_build_error(err, false), true);
             if (!_chk_machine_space_preview.get_active()) {
                 return;
             }
@@ -1339,10 +1826,7 @@ void GrblControlPanel::sync_plot_preview_overlay()
             _plot_preview_overlay->set_visible(true);
 
             if (total > included) {
-                status_note = Glib::ustring::compose(
-                    _("Document-space preview shows %1 of %2 segments (simplify the drawing or turn that preview off "
-                      "to reduce load)."),
-                    static_cast<guint64>(included), static_cast<guint64>(total));
+                status_note = make_preview_summary(false, included, total, false);
             }
         }
     }
@@ -1358,8 +1842,7 @@ void GrblControlPanel::sync_plot_preview_overlay()
     std::size_t tot_m = 0;
     if (!build_grbl_plot_machine_preview_pathvector_in_doc_space(doc, params, ctx, pv_m, err_m, &clip_approx,
                                                                  k_preview_max_strokes, &inc_m, &tot_m)) {
-        post_status(err_m.empty() ? Glib::ustring(_("Could not build machine-space plot preview.")) : Glib::ustring(err_m),
-                    true);
+        post_status(make_preview_build_error(err_m, true), true);
         return;
     }
     if (!pv_m.empty()) {
@@ -1373,18 +1856,43 @@ void GrblControlPanel::sync_plot_preview_overlay()
         _plot_preview_machine_overlay->set_stroke_width(1.25);
         _plot_preview_machine_overlay->set_visible(true);
         if (clip_approx && tot_m > inc_m) {
-            status_note = Glib::ustring::compose(
-                _("Machine-space preview shows %1 of %2 segments and is approximate where bed clipping removed "
-                  "geometry."),
-                static_cast<guint64>(inc_m), static_cast<guint64>(tot_m));
+            status_note = make_preview_summary(true, inc_m, tot_m, true);
         } else if (clip_approx) {
-            status_note = _("Machine-space preview is approximate where machine-bed clipping removed geometry.");
+            status_note = make_preview_summary(true, inc_m, tot_m, true);
         } else if (tot_m > inc_m) {
-            status_note = Glib::ustring::compose(
-                _("Machine-space preview shows %1 of %2 segments (simplify the drawing to preview everything)."),
-                static_cast<guint64>(inc_m), static_cast<guint64>(tot_m));
+            status_note = make_preview_summary(true, inc_m, tot_m, false);
         }
     }
+
+    double const bed_w = std::max(1.0, _bed_width_spin.get_value());
+    double const bed_h = std::max(1.0, _bed_depth_spin.get_value());
+    Geom::Point const origin_dt = Geom::Point(0.0, 0.0) * aff;
+    double const axis_len_doc = std::max(18.0, std::min(bed_w, bed_h) * 0.14);
+
+    auto const x_dir_doc = machine_axis_direction(params.swap_xy, params.invert_x, params.invert_y, true);
+    auto const y_dir_doc = machine_axis_direction(params.swap_xy, params.invert_x, params.invert_y, false);
+    Geom::Point const x_end_dt = (Geom::Point(0.0, 0.0) + x_dir_doc * axis_len_doc) * aff;
+    Geom::Point const y_end_dt = (Geom::Point(0.0, 0.0) + y_dir_doc * axis_len_doc) * aff;
+    Geom::PathVector axis_pv;
+    append_axis_arrow(axis_pv, origin_dt, x_end_dt, 12.0, 5.0);
+    append_axis_arrow(axis_pv, origin_dt, y_end_dt, 12.0, 5.0);
+    _plot_preview_machine_axis_overlay = make_canvasitem<CanvasItemBpath>(desk->getCanvasTemp(), axis_pv, true);
+    _plot_preview_machine_axis_overlay->set_stroke(0x00aa55ee);
+    _plot_preview_machine_axis_overlay->set_fill(0x00000000, SP_WIND_RULE_NONZERO);
+    _plot_preview_machine_axis_overlay->set_stroke_width(2.0);
+    _plot_preview_machine_axis_overlay->set_visible(true);
+
+    auto make_axis_label = [desk](Geom::Point const &pos, Glib::ustring const &text, uint32_t bg) {
+        auto label = make_canvasitem<CanvasItemText>(desk->getCanvasTemp(), pos, text);
+        label->set_fontsize(11.0);
+        label->set_background(bg);
+        label->set_border(4.0);
+        label->set_visible(true);
+        return label;
+    };
+    _plot_preview_axis_origin_label = make_axis_label(origin_dt + Geom::Point(8.0, -8.0), _("机器原点"), 0x003344dd);
+    _plot_preview_axis_x_label = make_axis_label(x_end_dt + Geom::Point(8.0, -8.0), _("机器 X+"), 0x005522dd);
+    _plot_preview_axis_y_label = make_axis_label(y_end_dt + Geom::Point(8.0, -8.0), _("机器 Y+"), 0x225500dd);
     if (!status_note.empty()) {
         post_status(status_note, false);
     }
@@ -1398,20 +1906,13 @@ void GrblControlPanel::on_fill_gcode_from_document()
     auto *doc = getDocument();
     auto *desktop = getDesktop();
     if (!doc || !desktop) {
-        post_status(_("No active document or desktop."), true);
+        post_status(_("没有活动文档或桌面。"), true);
         clear_plot_preview_overlay();
         return;
     }
 
-    auto *prefs = Inkscape::Preferences::get();
-    Inkscape::Axidraw::GrblExportParams params;
-    grbl_export_params_from_preferences(prefs, params);
-
-    Inkscape::Axidraw::GrblExportContext ctx;
-    ctx.desktop = desktop;
-    ctx.selection = getSelection();
-    ctx.use_current_layer_without_selection = prefs->getBool(k_pref_limit_layer, false);
-    ctx.cancel = nullptr;
+    auto params = make_export_params_from_preferences();
+    auto ctx = make_export_context(*this, desktop);
 
     std::string out;
     std::string err;
@@ -1419,57 +1920,21 @@ void GrblControlPanel::on_fill_gcode_from_document()
     GrblPlotStats stats{};
     if (!build_grbl_plot_gcode_string(doc, params, ctx, out, err, &strokes, k_max_gcode_editor_bytes, &stats)) {
         clear_plot_preview_overlay();
-        post_status(err.empty() ? Glib::ustring(_("Could not build G-code from the current document.")) : Glib::ustring(err),
-                    true);
+        post_status(err.empty() ? Glib::ustring(_("无法根据当前图稿生成 G-code。")) : Glib::ustring(err), true);
         return;
     }
     if (auto const buf = _gcode_view.get_buffer()) {
         buf->set_text(out);
     }
-    if (stats.has_bounds_mm) {
-        std::ostringstream wxh;
-        wxh << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm) << " x "
-            << (stats.max_y_mm - stats.min_y_mm);
-        if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
-            double const total = stats.draw_length_mm + stats.travel_length_mm;
-            double const air = (stats.travel_length_mm / total) * 100.0;
-            std::ostringstream lengths;
-            lengths << std::fixed << std::setprecision(1) << stats.draw_length_mm << " / " << stats.travel_length_mm;
-            std::ostringstream ratio;
-            ratio << std::fixed << std::setprecision(1) << air;
-            post_status(
-                Glib::ustring::compose(
-                    _("编辑器已填入 %1 条笔画，对应工作区域约 %2 mm，绘制/空走长度 %3 mm，空走占比 %4%%。"
-                      "请先检查，如有需要可“另存为 G-code”，然后再“发送到机器”。"),
-                    static_cast<guint64>(strokes), Glib::ustring(wxh.str()), Glib::ustring(lengths.str()),
-                    Glib::ustring(ratio.str())),
-                false);
-        } else {
-            post_status(
-                Glib::ustring::compose(
-                    _("编辑器已填入 %1 条笔画，对应工作区域约 %2 mm（按首选项换算后的机器坐标）。"
-                      "请先检查，如有需要可“另存为 G-code”，然后再“发送到机器”。"),
-                    static_cast<guint64>(strokes), Glib::ustring(wxh.str())),
-                false);
-        }
-    } else {
-        post_status(
-            Glib::ustring::compose(
-                _("编辑器已为 %1 条笔画生成 G-code。请先检查内容，确认后再“发送到机器”。"),
-                static_cast<guint64>(strokes)),
-            false);
-    }
-    if (_chk_canvas_plot_preview.get_active() || _chk_machine_space_preview.get_active()) {
+    refresh_plot_feedback(false);
+    post_status(make_fill_gcode_status(strokes, stats), false);
+    if (has_plot_preview_enabled()) {
         sync_plot_preview_overlay();
     }
 }
 
 void GrblControlPanel::on_send_document_direct()
 {
-    if (_gcode_sending.load()) {
-        return;
-    }
-
     auto *doc = getDocument();
     auto *desktop = getDesktop();
     if (!doc || !desktop) {
@@ -1492,16 +1957,16 @@ void GrblControlPanel::on_send_document_direct()
         return;
     }
 
-    bool const use_current_layer_without_selection = prefs->getBool(k_pref_limit_layer, false);
-    auto *selection = getSelection();
-    if (_chk_canvas_plot_preview.get_active() || _chk_machine_space_preview.get_active()) {
+    auto base_ctx = make_export_context(*this, desktop);
+    bool const use_current_layer_without_selection = base_ctx.use_current_layer_without_selection;
+    auto *selection = base_ctx.selection;
+    if (has_plot_preview_enabled()) {
         sync_plot_preview_overlay();
     }
 
-    _gcode_sending = true;
-    _gcode_cancel = false;
-    set_controls_sensitive_for_gcode_stream(false);
-    post_status(_("正在按当前图稿直接流式发送到绘图机..."), false);
+    if (!begin_gcode_stream_ui(_("正在按当前图稿直接流式发送到绘图机..."))) {
+        return;
+    }
 
     auto *win = dynamic_cast<Gtk::Window *>(get_root());
     if (params.manual_pen_change && params.pen_change_prompt && !win) {
@@ -1566,25 +2031,10 @@ void GrblControlPanel::on_send_document_direct()
                 return;
             }
             *last_paint = now;
-
-            if (progress->lines_est > 0 && progress->lines_sent > 0 && progress->stroke_total > 0 &&
-                progress->stroke_done > 0) {
-                post_status(Glib::ustring::compose(_("正在发送：第 %1 / %2 条笔画，第 %3 / ~%4 行..."),
-                                                   static_cast<guint64>(progress->stroke_done),
-                                                   static_cast<guint64>(progress->stroke_total),
-                                                   static_cast<guint64>(progress->lines_sent),
-                                                   static_cast<guint64>(progress->lines_est)),
-                            false);
-            } else if (progress->lines_est > 0 && progress->lines_sent > 0) {
-                post_status(Glib::ustring::compose(_("正在发送：第 %1 / ~%2 行..."),
-                                                   static_cast<guint64>(progress->lines_sent),
-                                                   static_cast<guint64>(progress->lines_est)),
-                            false);
-            } else if (progress->stroke_total > 0 && progress->stroke_done > 0) {
-                post_status(Glib::ustring::compose(_("正在发送：第 %1 / %2 条笔画..."),
-                                                   static_cast<guint64>(progress->stroke_done),
-                                                   static_cast<guint64>(progress->stroke_total)),
-                            false);
+            auto const status = make_direct_send_progress_status(progress->stroke_done, progress->stroke_total,
+                                                                 progress->lines_sent, progress->lines_est);
+            if (!status.empty()) {
+                post_status(status, false);
             }
         };
         ctx.on_plot_stroke_progress = [progress, refresh_status](std::size_t done, std::size_t total) {
@@ -1605,27 +2055,13 @@ void GrblControlPanel::on_send_document_direct()
         std::size_t strokes = 0;
         GrblPlotStats stats{};
         if (!export_paths_to_grbl(*_port, doc, params, ctx, err, &strokes, &stats)) {
-            if (err == grbl_error_user_cancelled()) {
-                post_status(_("发送已停止（已取消）。"), false);
-            } else {
-                post_status(Glib::ustring(Inkscape::Axidraw::grbl_error_to_user_message(err)), true);
-            }
+            post_gcode_stream_result(err);
             finish();
             return;
         }
 
-        if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
-            double const total = stats.draw_length_mm + stats.travel_length_mm;
-            double const air = (stats.travel_length_mm / total) * 100.0;
-            std::ostringstream ratio;
-            ratio << std::fixed << std::setprecision(1) << air;
-            post_status(Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画，空走占比约 %2%%。"),
-                                               static_cast<guint64>(strokes), Glib::ustring(ratio.str())),
-                        false);
-        } else {
-            post_status(Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画。"), static_cast<guint64>(strokes)),
-                        false);
-        }
+        refresh_plot_feedback(false);
+        post_status(make_direct_send_done_status(strokes, stats), false);
         finish();
     }).detach();
 }
@@ -1760,9 +2196,6 @@ void GrblControlPanel::on_save_gcode_as()
 
 void GrblControlPanel::on_send_gcode()
 {
-    if (_gcode_sending.load()) {
-        return;
-    }
     Glib::RefPtr<Gtk::TextBuffer> const buf = _gcode_view.get_buffer();
     if (!buf) {
         return;
@@ -1787,9 +2220,9 @@ void GrblControlPanel::on_send_gcode()
         return;
     }
     std::size_t const total_exec = count_executable_gcode_lines(text);
-    _gcode_sending = true;
-    _gcode_cancel = false;
-    set_controls_sensitive_for_gcode_stream(false);
+    if (!begin_gcode_stream_ui({})) {
+        return;
+    }
 
     std::thread(
         [this, text = std::move(text), total_exec, send_from_cursor, editor_line_1]() mutable
@@ -1866,11 +2299,7 @@ void GrblControlPanel::on_send_gcode()
                     break;
                 }
                 if (!link_write_line(line, err)) {
-                    if (err == grbl_error_user_cancelled()) {
-                        post_status(_("发送已停止（已取消）。"), false);
-                    } else {
-                        post_status(Glib::ustring(Inkscape::Axidraw::grbl_error_to_user_message(err)), true);
-                    }
+                    post_gcode_stream_result(err);
                     finish();
                     return;
                 }
@@ -1878,7 +2307,7 @@ void GrblControlPanel::on_send_gcode()
                 try_send_progress(sent, false);
             }
             if (!err.empty()) {
-                post_status(Glib::ustring(Inkscape::Axidraw::grbl_error_to_user_message(err)), true);
+                post_gcode_stream_result(err);
             } else if (sent == 0) {
                 post_status(_("没有可执行的行（只有空行或注释）。"), false);
             } else if (send_from_cursor) {
@@ -1948,6 +2377,10 @@ void GrblControlPanel::build_ui()
     _btn_read_firmware.set_icon_name("document-properties-symbolic");
     _btn_read_firmware.set_tooltip_text(
         _("读取 $I / $G / $# / $$，并自动同步绘图机的方向反转与床面尺寸。"));
+    _chk_sync_page_to_bed.set_halign(Gtk::Align::START);
+    _chk_sync_page_to_bed.set_active(true);
+    _chk_sync_page_to_bed.set_tooltip_text(
+        _("启用后，如果固件返回了 $130/$131，就把当前文档页面尺寸同步成机器 X/Y 行程（单位 mm）。"));
     _machine_status.set_halign(Gtk::Align::START);
     _machine_status.set_ellipsize(Pango::EllipsizeMode::END);
     _machine_status.set_max_width_chars(56);
@@ -2014,6 +2447,11 @@ void GrblControlPanel::build_ui()
     _btn_pen_down.set_tooltip_text(_("使用与绘图输出相同的落笔方式（见 首选项 / GRBL）。"));
     _btn_pen_down.set_icon_name("go-down-symbolic");
     _jog_dist.set_tooltip_text(_("X/Y 点动按钮使用的步长。"));
+    _btn_fit_to_bed.set_tooltip_text(_("按当前机器床面宽/深，等比缩小整张图稿到行程内；如果本来就更小，则只移动到原点范围内。"));
+    _btn_fit_to_bed.set_icon_name("transform-scale-symbolic");
+    _btn_center_to_bed.set_tooltip_text(_("不改变图稿大小，只把整张图稿平移到当前机器行程的中心位置。"));
+    _btn_center_to_bed.set_icon_name("align-horizontal-center-symbolic");
+    _layout_scale_summary.set_tooltip_text(_("这里会持续显示当前图稿相对机器行程的占用比例，以及“一键适配”后会缩放到多少。"));
 
     _chk_swap_xy.set_tooltip_text(_("将导出的机器坐标 X/Y 互换，适合机器坐标系相对画布旋转 90° 的情况。"));
     _chk_invert_x.set_tooltip_text(_("反转最终输出到机器的 X 坐标方向。"));
@@ -2089,6 +2527,11 @@ void GrblControlPanel::build_ui()
           "<b>取消</b> 会在当前行结束后生效。</small>"));
     _gcode_help.set_wrap(true);
     _gcode_help.set_halign(Gtk::Align::START);
+    _gcode_help.set_margin_bottom(4);
+    setup_summary_label(_job_summary, _("<b>任务概览</b>\n尚未分析当前图稿。"), 4, 4);
+    auto *job_summary_frame = Gtk::make_managed<Gtk::Frame>();
+    job_summary_frame->set_label(_("任务概览"));
+    job_summary_frame->set_child(_job_summary);
     auto *job_tuning_grid = Gtk::make_managed<Gtk::Grid>();
     job_tuning_grid->set_row_spacing(4);
     job_tuning_grid->set_column_spacing(8);
@@ -2226,6 +2669,27 @@ void GrblControlPanel::build_ui()
     Inkscape::UI::pack_start(_port_row, _btn_refresh_ports, false, false, 0);
     Inkscape::UI::pack_start(_port_row, _btn_read_firmware, false, false, 0);
 
+    auto *frame_layout = Gtk::make_managed<Gtk::Frame>();
+    frame_layout->set_label(_("页面与机器坐标"));
+    frame_layout->set_margin_top(0);
+    auto *box_layout = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+    auto *layout_hint = Gtk::make_managed<Gtk::Label>(
+        _("<small>这里的操作会直接按当前机器行程整理画布，并在画布预览中标出机器原点、机器 X+、机器 Y+ 方向。</small>"),
+        Gtk::Align::START);
+    layout_hint->set_use_markup(true);
+    layout_hint->set_wrap(true);
+    auto *top_actions = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+    _btn_fit_to_bed.set_hexpand(true);
+    _btn_center_to_bed.set_hexpand(true);
+    top_actions->append(_btn_fit_to_bed);
+    top_actions->append(_btn_center_to_bed);
+    setup_summary_label(_layout_scale_summary, _("<b>当前缩放</b>\n尚未分析当前图稿与机器行程。"), 2, 2);
+    Inkscape::UI::pack_start(*box_layout, *top_actions, false, false, 0);
+    Inkscape::UI::pack_start(*box_layout, _layout_scale_summary, false, false, 0);
+    Inkscape::UI::pack_start(*box_layout, _chk_sync_page_to_bed, false, false, 0);
+    Inkscape::UI::pack_start(*box_layout, *layout_hint, false, false, 0);
+    frame_layout->set_child(*box_layout);
+
     auto *frame_serial = Gtk::make_managed<Gtk::Frame>();
     frame_serial->set_label(_("绘图机连接"));
     frame_serial->set_margin_top(0);
@@ -2300,6 +2764,8 @@ void GrblControlPanel::build_ui()
     Inkscape::UI::pack_start(*box_log, _status, true, true, 0);
     frame_log->set_child(*box_log);
 
+    Inkscape::UI::pack_start(_vbox, *frame_layout, false, false, 0);
+    Inkscape::UI::pack_start(_vbox, *job_summary_frame, false, false, 0);
     Inkscape::UI::pack_start(_vbox, *frame_serial, false, false, 0);
     Inkscape::UI::pack_start(_vbox, *frame_mapping, false, false, 0);
     Inkscape::UI::pack_start(_vbox, *frame_motion, false, false, 0);
@@ -2488,6 +2954,9 @@ void GrblControlPanel::build_ui()
     _chk_canvas_plot_preview.signal_toggled().connect(sigc::mem_fun(*this, &GrblControlPanel::sync_plot_preview_overlay));
     _chk_machine_space_preview.signal_toggled().connect(
         sigc::mem_fun(*this, &GrblControlPanel::sync_plot_preview_overlay));
+    _chk_sync_page_to_bed.signal_toggled().connect([this] { save_mapping_preferences_from_ui(true); });
+    _btn_fit_to_bed.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_fit_document_to_bed));
+    _btn_center_to_bed.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_center_document_to_bed));
     _btn_load_gcode.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_load_gcode_from_file));
     _btn_fill_from_drawing.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_fill_gcode_from_document));
     _btn_send_from_drawing.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_send_document_direct));
@@ -2507,4 +2976,3 @@ void GrblControlPanel::build_ui()
   fill-column:99
   End:
 */
-

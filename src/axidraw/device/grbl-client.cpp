@@ -161,41 +161,12 @@ static bool grbl_wait_ok(PortT &port, std::string &err_out)
 }
 
 template <typename PortT>
-static bool grbl_send_line_impl(PortT &port, std::string const &line, std::string &err_out)
-{
-    if (grbl_cancelled(err_out)) {
-        return false;
-    }
-    grbl_progress_tick();
-    if (!port.write_line(line)) {
-        err_out = "serial write failed";
-        return false;
-    }
-    return grbl_wait_ok(port, err_out);
-}
-
-bool grbl_send_line(SerialPort &port, std::string const &line, std::string &err_out)
-{
-    return grbl_send_line_impl(port, line, err_out);
-}
-
-bool grbl_send_line(TcpPort &port, std::string const &line, std::string &err_out)
-{
-    return grbl_send_line_impl(port, line, err_out);
-}
-
-GrblProbeResult probe_grbl(std::string const &device, int baud)
+static GrblProbeResult probe_open_grbl_impl(PortT &port)
 {
     GrblProbeResult r;
-    SerialPort port;
-    if (!port.open(device, baud)) {
-        return r;
-    }
-
     port.purge_io();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Drain any banner lines without blocking too long.
     {
         std::string junk;
         for (int i = 0; i < 20; ++i) {
@@ -223,47 +194,60 @@ GrblProbeResult probe_grbl(std::string const &device, int baud)
         r.ok = true;
         return r;
     }
-    // Non-empty unexpected line: treat as connected but unknown firmware dialect.
     r.ok = !r.response_line.empty();
     return r;
 }
 
+template <typename PortT>
+static bool grbl_send_line_impl(PortT &port, std::string const &line, std::string &err_out)
+{
+    if (grbl_cancelled(err_out)) {
+        return false;
+    }
+    grbl_progress_tick();
+    if (!port.write_line(line)) {
+        err_out = "serial write failed";
+        return false;
+    }
+    return grbl_wait_ok(port, err_out);
+}
+
+bool grbl_send_line(SerialPort &port, std::string const &line, std::string &err_out)
+{
+    return grbl_send_line_impl(port, line, err_out);
+}
+
+bool grbl_send_line(TcpPort &port, std::string const &line, std::string &err_out)
+{
+    return grbl_send_line_impl(port, line, err_out);
+}
+
+GrblProbeResult probe_open_grbl(SerialPort &port)
+{
+    return probe_open_grbl_impl(port);
+}
+
+GrblProbeResult probe_open_grbl(TcpPort &port)
+{
+    return probe_open_grbl_impl(port);
+}
+
+GrblProbeResult probe_grbl(std::string const &device, int baud)
+{
+    SerialPort port;
+    if (!port.open(device, baud)) {
+        return {};
+    }
+    return probe_open_grbl_impl(port);
+}
+
 GrblProbeResult probe_grbl_tcp(std::string const &host, int port)
 {
-    GrblProbeResult r;
     TcpPort sock;
     if (!sock.open(host, port)) {
-        return r;
+        return {};
     }
-
-    sock.purge_io();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    {
-        std::string junk;
-        for (int i = 0; i < 20; ++i) {
-            if (!sock.read_line(junk, 60)) {
-                break;
-            }
-        }
-    }
-    if (!sock.write_line("?")) {
-        return r;
-    }
-    std::string line;
-    if (!sock.read_line(line, 2500)) {
-        return r;
-    }
-    r.response_line = std::move(line);
-    if (grbl_is_error_line(r.response_line)) {
-        r.ok = false;
-        return r;
-    }
-    if (r.response_line.find('<') != std::string::npos || r.response_line.find("ok") != std::string::npos) {
-        r.ok = true;
-        return r;
-    }
-    r.ok = !r.response_line.empty();
-    return r;
+    return probe_open_grbl_impl(sock);
 }
 
 } // namespace Inkscape::Axidraw

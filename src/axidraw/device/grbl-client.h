@@ -35,6 +35,9 @@ struct GrblProbeResult {
     std::string response_line;
 };
 
+/** Probe an already-open serial/TCP GRBL endpoint by sending a status poll (`?`). */
+GrblProbeResult probe_open_grbl(SerialPort &port);
+GrblProbeResult probe_open_grbl(TcpPort &port);
 /** Open @a device, send a status poll (`?`), return first meaningful line. */
 GrblProbeResult probe_grbl(std::string const &device, int baud);
 /** Connect @a host:@a port over TCP, send `?`, return first meaningful line. */
