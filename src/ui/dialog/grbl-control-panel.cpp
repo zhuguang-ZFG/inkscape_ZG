@@ -450,14 +450,6 @@ void set_layout_scale_summary_from_stats(Gtk::Label &label, Inkscape::Axidraw::G
     label.set_markup(out.str());
 }
 
-bool analyze_plot_for_feedback(Inkscape::UI::Dialog::GrblControlPanel &panel, SPDocument *doc, SPDesktop *desktop,
-                               Inkscape::Axidraw::GrblPlotStats &stats, std::string &err)
-{
-    auto params = make_export_params_from_preferences();
-    auto ctx = make_export_context(panel, desktop);
-    return analyze_grbl_plot(doc, params, ctx, stats, err);
-}
-
 void set_no_active_document_summaries(Gtk::Label &job_summary, Gtk::Label &layout_scale_summary)
 {
     job_summary.set_markup(_("<b>任务概览</b>\n暂无活动文档。"));
@@ -527,6 +519,24 @@ Glib::RefPtr<Gio::ListStore<Gtk::FileFilter>> create_gcode_file_filters()
     all->add_pattern("*");
     filters->append(all);
     return filters;
+}
+
+bool update_check_if_needed(Gtk::CheckButton &button, bool const value)
+{
+    if (button.get_active() == value) {
+        return false;
+    }
+    button.set_active(value);
+    return true;
+}
+
+bool update_spin_if_needed(Gtk::SpinButton &spin, double const value, double const epsilon = 1e-6)
+{
+    if (std::abs(spin.get_value() - value) <= epsilon) {
+        return false;
+    }
+    spin.set_value(value);
+    return true;
 }
 
 Glib::ustring make_preview_build_error(std::string const &err, bool machine_space)
@@ -838,6 +848,35 @@ void GrblControlPanel::update_page_restore_button()
     _btn_restore_page_size.set_sensitive(_has_saved_page_restore && !has_active_gcode_stream());
 }
 
+bool GrblControlPanel::get_configured_bed_size_mm(double &bed_width_mm, double &bed_height_mm) const
+{
+    bed_width_mm = _bed_width_spin.get_value();
+    bed_height_mm = _bed_depth_spin.get_value();
+    return bed_width_mm > 0.0 && bed_height_mm > 0.0;
+}
+
+bool GrblControlPanel::prepare_document_bed_action(SPDocument *&doc, Geom::Rect &bounds, double &bed_w_doc,
+                                                   double &bed_h_doc, Glib::ustring &error,
+                                                   Glib::ustring const &empty_message) const
+{
+    doc = getDocument();
+    if (!doc) {
+        error = _("没有活动文档。");
+        return false;
+    }
+    double bed_width_mm = 0.0;
+    double bed_height_mm = 0.0;
+    if (!get_configured_bed_size_mm(bed_width_mm, bed_height_mm) ||
+        !get_document_bounds_and_bed(doc, bed_width_mm, bed_height_mm, bounds, bed_w_doc, bed_h_doc, error,
+                                     empty_message)) {
+        if (error.empty()) {
+            error = _("机器行程无效，请先同步或设置床面宽度/深度。");
+        }
+        return false;
+    }
+    return true;
+}
+
 void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_interaction)
 {
     _chk_swap_xy.set_sensitive(allow_interaction);
@@ -1022,6 +1061,55 @@ void GrblControlPanel::apply_document_and_page_size_px(SPDocument *doc, double c
     }
     doc->ensureUpToDate();
     request_canvas_redraw();
+}
+
+bool GrblControlPanel::sync_document_page_to_bed_mm(SPDocument *doc, double const width_mm, double const height_mm,
+                                                    bool &unit_synced_out)
+{
+    unit_synced_out = false;
+    if (!doc || !(width_mm > 0.0) || !(height_mm > 0.0)) {
+        return false;
+    }
+
+    capture_page_restore_state(doc);
+    Inkscape::Util::Quantity const width(width_mm, "mm");
+    Inkscape::Util::Quantity const height(height_mm, "mm");
+    apply_document_and_page_size_px(doc, width.value("px"), height.value("px"), width.value("px"), height.value("px"));
+
+    if (auto *nv = doc->getNamedView()) {
+        if (auto *repr = nv->getRepr()) {
+            repr->setAttribute("inkscape:document-units", "mm");
+            unit_synced_out = true;
+        }
+    }
+    if (auto action = doc->getActionGroup()->lookup_action("set-display-unit")) {
+        action->activate(Glib::Variant<Glib::ustring>::create("mm"));
+    }
+    return true;
+}
+
+void GrblControlPanel::finalize_document_geometry_change(SPDocument *doc, DocumentGeometryChange const change,
+                                                         bool const refresh_preview)
+{
+    if (!doc) {
+        return;
+    }
+    doc->setModifiedSinceSave();
+    switch (change) {
+        case DocumentGeometryChange::sync_page_to_bed:
+            Inkscape::DocumentUndo::done(doc, RC_("Undo", "按机器行程同步页面尺寸和单位"), "");
+            break;
+        case DocumentGeometryChange::fit_to_bed:
+            Inkscape::DocumentUndo::done(doc, RC_("Undo", "按机器行程缩放图稿"), "");
+            break;
+        case DocumentGeometryChange::center_to_bed:
+            Inkscape::DocumentUndo::done(doc, RC_("Undo", "按机器行程居中图稿"), "");
+            break;
+        case DocumentGeometryChange::restore_page:
+            Inkscape::DocumentUndo::done(doc, RC_("Undo", "恢复原页面尺寸"), "");
+            break;
+    }
+    schedule_plot_feedback_refresh(refresh_preview);
 }
 
 void GrblControlPanel::post_status(Glib::ustring const &text, bool const is_error)
@@ -1277,6 +1365,25 @@ bool GrblControlPanel::require_active_plot_target(SPDocument *&doc, SPDesktop *&
     return false;
 }
 
+void GrblControlPanel::prepare_export_settings(SPDesktop *desktop, Inkscape::Axidraw::GrblExportParams &params,
+                                               Inkscape::Axidraw::GrblExportContext &ctx)
+{
+    params = make_export_params_from_preferences();
+    ctx = make_export_context(*this, desktop);
+}
+
+bool GrblControlPanel::prepare_active_export_target(SPDocument *&doc, SPDesktop *&desktop,
+                                                    Inkscape::Axidraw::GrblExportParams &params,
+                                                    Inkscape::Axidraw::GrblExportContext &ctx,
+                                                    bool const clear_preview_on_failure)
+{
+    if (!require_active_plot_target(doc, desktop, clear_preview_on_failure)) {
+        return false;
+    }
+    prepare_export_settings(desktop, params, ctx);
+    return true;
+}
+
 void GrblControlPanel::refresh_plot_feedback_after_gcode_change()
 {
     schedule_plot_feedback_refresh(has_plot_preview_enabled());
@@ -1325,9 +1432,13 @@ void GrblControlPanel::refresh_plot_summaries()
         return;
     }
 
+    Inkscape::Axidraw::GrblExportParams params;
+    Inkscape::Axidraw::GrblExportContext ctx;
+    prepare_export_settings(desktop, params, ctx);
+
     GrblPlotStats stats{};
     std::string err;
-    if (!analyze_plot_for_feedback(*this, doc, desktop, stats, err)) {
+    if (!analyze_grbl_plot(doc, params, ctx, stats, err)) {
         set_analysis_error_summaries(_job_summary, _layout_scale_summary, err);
         return;
     }
@@ -1752,17 +1863,14 @@ void GrblControlPanel::on_read_firmware_settings()
                 bool changed_local = false;
                 _suspend_mapping_sync = true;
                 if (snapshot_in.has_direction_mask) {
-                    _chk_invert_x.set_active((snapshot_in.direction_mask & 0x1) != 0);
-                    _chk_invert_y.set_active((snapshot_in.direction_mask & 0x2) != 0);
-                    changed_local = true;
+                    changed_local = update_check_if_needed(_chk_invert_x, (snapshot_in.direction_mask & 0x1) != 0) || changed_local;
+                    changed_local = update_check_if_needed(_chk_invert_y, (snapshot_in.direction_mask & 0x2) != 0) || changed_local;
                 }
                 if (snapshot_in.has_x_travel) {
-                    _bed_width_spin.set_value(snapshot_in.x_travel_mm);
-                    changed_local = true;
+                    changed_local = update_spin_if_needed(_bed_width_spin, snapshot_in.x_travel_mm) || changed_local;
                 }
                 if (snapshot_in.has_y_travel) {
-                    _bed_depth_spin.set_value(snapshot_in.y_travel_mm);
-                    changed_local = true;
+                    changed_local = update_spin_if_needed(_bed_depth_spin, snapshot_in.y_travel_mm) || changed_local;
                 }
                 _suspend_mapping_sync = false;
 
@@ -1770,23 +1878,11 @@ void GrblControlPanel::on_read_firmware_settings()
                 unit_synced_out = false;
                 if (_chk_sync_page_to_bed.get_active() && snapshot_in.has_x_travel && snapshot_in.has_y_travel) {
                     if (auto *doc = getDocument()) {
-                        capture_page_restore_state(doc);
-                        Inkscape::Util::Quantity const width(snapshot_in.x_travel_mm, "mm");
-                        Inkscape::Util::Quantity const height(snapshot_in.y_travel_mm, "mm");
-                        apply_document_and_page_size_px(doc, width.value("px"), height.value("px"), width.value("px"),
-                                                        height.value("px"));
-                        if (auto *nv = doc->getNamedView()) {
-                            if (auto *repr = nv->getRepr()) {
-                                repr->setAttribute("inkscape:document-units", "mm");
-                                unit_synced_out = true;
-                            }
+                        page_synced_out =
+                            sync_document_page_to_bed_mm(doc, snapshot_in.x_travel_mm, snapshot_in.y_travel_mm, unit_synced_out);
+                        if (page_synced_out) {
+                            finalize_document_geometry_change(doc, DocumentGeometryChange::sync_page_to_bed);
                         }
-                        if (auto action = doc->getActionGroup()->lookup_action("set-display-unit")) {
-                            action->activate(Glib::Variant<Glib::ustring>::create("mm"));
-                        }
-                        doc->setModifiedSinceSave();
-                        Inkscape::DocumentUndo::done(doc, RC_("Undo", "按机器行程同步页面尺寸和单位"), "");
-                        page_synced_out = true;
                     }
                 }
 
@@ -2044,13 +2140,12 @@ void GrblControlPanel::on_fit_document_to_bed()
         return;
     }
 
-    auto *doc = getDocument();
+    auto *doc = static_cast<SPDocument *>(nullptr);
     Geom::Rect bounds;
     double bed_w_doc = 0.0;
     double bed_h_doc = 0.0;
     Glib::ustring error;
-    if (!get_document_bounds_and_bed(doc, _bed_width_spin.get_value(), _bed_depth_spin.get_value(), bounds, bed_w_doc,
-                                     bed_h_doc, error, _("当前文档没有可缩放的绘图内容。"))) {
+    if (!prepare_document_bed_action(doc, bounds, bed_w_doc, bed_h_doc, error, _("当前文档没有可缩放的绘图内容。"))) {
         post_status(error, true);
         return;
     }
@@ -2070,10 +2165,7 @@ void GrblControlPanel::on_fit_document_to_bed()
         doc->getRoot()->scaleChildItemsRec(Geom::Scale(scale), bounds.min(), false);
     }
     doc->getRoot()->translateChildItems(Geom::Translate(-bounds.min()[Geom::X], -bounds.min()[Geom::Y]));
-    doc->setModifiedSinceSave();
-    Inkscape::DocumentUndo::done(doc, RC_("Undo", "按机器行程缩放图稿"), "");
-
-    schedule_plot_feedback_refresh(true);
+    finalize_document_geometry_change(doc, DocumentGeometryChange::fit_to_bed);
 
     std::ostringstream msg;
     if (scale < 0.999999) {
@@ -2093,13 +2185,12 @@ void GrblControlPanel::on_center_document_to_bed()
         return;
     }
 
-    auto *doc = getDocument();
+    auto *doc = static_cast<SPDocument *>(nullptr);
     Geom::Rect bounds;
     double bed_w_doc = 0.0;
     double bed_h_doc = 0.0;
     Glib::ustring error;
-    if (!get_document_bounds_and_bed(doc, _bed_width_spin.get_value(), _bed_depth_spin.get_value(), bounds, bed_w_doc,
-                                     bed_h_doc, error, _("当前文档没有可居中的绘图内容。"))) {
+    if (!prepare_document_bed_action(doc, bounds, bed_w_doc, bed_h_doc, error, _("当前文档没有可居中的绘图内容。"))) {
         post_status(error, true);
         return;
     }
@@ -2109,10 +2200,7 @@ void GrblControlPanel::on_center_document_to_bed()
     double const dx = ((bed_w_doc - content_w) * 0.5) - bounds.min()[Geom::X];
     double const dy = ((bed_h_doc - content_h) * 0.5) - bounds.min()[Geom::Y];
     doc->getRoot()->translateChildItems(Geom::Translate(dx, dy));
-    doc->setModifiedSinceSave();
-    Inkscape::DocumentUndo::done(doc, RC_("Undo", "按机器行程居中图稿"), "");
-
-    schedule_plot_feedback_refresh(true);
+    finalize_document_geometry_change(doc, DocumentGeometryChange::center_to_bed);
 
     post_status(_("已将图稿整体居中到机器行程范围内。"), false);
 }
@@ -2137,11 +2225,9 @@ void GrblControlPanel::on_restore_page_size()
 
     apply_document_and_page_size_px(doc, _saved_doc_width_px, _saved_doc_height_px, _saved_page_width_px,
                                     _saved_page_height_px);
-    doc->setModifiedSinceSave();
-    Inkscape::DocumentUndo::done(doc, RC_("Undo", "恢复原页面尺寸"), "");
+    finalize_document_geometry_change(doc, DocumentGeometryChange::restore_page);
 
     clear_page_restore_state();
-    schedule_plot_feedback_refresh(true);
     post_status(_("已恢复同步前的页面尺寸。"), false);
 }
 
@@ -2216,6 +2302,92 @@ void GrblControlPanel::clear_plot_preview_overlay()
     request_canvas_redraw();
 }
 
+bool GrblControlPanel::build_document_preview_overlay(SPDocument *doc, SPDesktop *desktop,
+                                                      Inkscape::Axidraw::GrblExportParams const &params,
+                                                      Inkscape::Axidraw::GrblExportContext const &ctx,
+                                                      Geom::Affine const &affine, Glib::ustring &status_note)
+{
+    if (!_chk_canvas_plot_preview.get_active()) {
+        return true;
+    }
+
+    constexpr std::size_t k_preview_max_strokes = 12000;
+    Geom::PathVector pv_doc;
+    std::string err;
+    std::size_t included = 0;
+    std::size_t total = 0;
+    if (!build_grbl_plot_preview_pathvector(doc, params, ctx, pv_doc, err, k_preview_max_strokes, &included, &total)) {
+        post_status(make_preview_build_error(err, false), true);
+        return false;
+    }
+    if (pv_doc.empty()) {
+        return true;
+    }
+
+    _plot_preview_overlay = make_canvasitem<CanvasItemBpath>(desktop->getCanvasTemp(),
+                                                             transform_pathvector_to_desktop(pv_doc, affine), true);
+    configure_preview_overlay(*_plot_preview_overlay, 0x22aaffcc, 1.0);
+    status_note = build_preview_status_note(false, included, total, false);
+    return true;
+}
+
+bool GrblControlPanel::build_machine_preview_overlay(SPDocument *doc, SPDesktop *desktop,
+                                                     Inkscape::Axidraw::GrblExportParams const &params,
+                                                     Inkscape::Axidraw::GrblExportContext const &ctx,
+                                                     Geom::Affine const &affine, Glib::ustring &status_note)
+{
+    if (!_chk_machine_space_preview.get_active()) {
+        return true;
+    }
+
+    constexpr std::size_t k_preview_max_strokes = 12000;
+    Geom::PathVector pv_m;
+    std::string err_m;
+    bool clip_approx = false;
+    std::size_t inc_m = 0;
+    std::size_t tot_m = 0;
+    if (!build_grbl_plot_machine_preview_pathvector_in_doc_space(doc, params, ctx, pv_m, err_m, &clip_approx, k_preview_max_strokes,
+                                                                 &inc_m, &tot_m)) {
+        post_status(make_preview_build_error(err_m, true), true);
+        return false;
+    }
+    if (pv_m.empty()) {
+        return true;
+    }
+
+    _plot_preview_machine_overlay = make_canvasitem<CanvasItemBpath>(desktop->getCanvasTemp(),
+                                                                     transform_pathvector_to_desktop(pv_m, affine), true);
+    configure_preview_overlay(*_plot_preview_machine_overlay, 0xff8844cc, 1.25);
+    status_note = build_preview_status_note(true, inc_m, tot_m, clip_approx);
+    return true;
+}
+
+void GrblControlPanel::build_machine_axis_overlay(SPDesktop *desktop, Inkscape::Axidraw::GrblExportParams const &params,
+                                                  Geom::Affine const &affine)
+{
+    double const bed_w = std::max(1.0, _bed_width_spin.get_value());
+    double const bed_h = std::max(1.0, _bed_depth_spin.get_value());
+    Geom::Point const origin_dt = Geom::Point(0.0, 0.0) * affine;
+    double const axis_len_doc = std::max(18.0, std::min(bed_w, bed_h) * 0.14);
+
+    auto const x_dir_doc = machine_axis_direction(params.swap_xy, params.invert_x, params.invert_y, true);
+    auto const y_dir_doc = machine_axis_direction(params.swap_xy, params.invert_x, params.invert_y, false);
+    Geom::Point const x_end_dt = (Geom::Point(0.0, 0.0) + x_dir_doc * axis_len_doc) * affine;
+    Geom::Point const y_end_dt = (Geom::Point(0.0, 0.0) + y_dir_doc * axis_len_doc) * affine;
+    Geom::PathVector axis_pv;
+    append_axis_arrow(axis_pv, origin_dt, x_end_dt, 12.0, 5.0);
+    append_axis_arrow(axis_pv, origin_dt, y_end_dt, 12.0, 5.0);
+    _plot_preview_machine_axis_overlay = make_canvasitem<CanvasItemBpath>(desktop->getCanvasTemp(), axis_pv, true);
+    configure_preview_overlay(*_plot_preview_machine_axis_overlay, 0x00aa55ee, 2.0);
+
+    _plot_preview_axis_origin_label = make_preview_axis_label(desktop, origin_dt + Geom::Point(8.0, -8.0), _("机器原点"),
+                                                              0x003344dd);
+    _plot_preview_axis_x_label = make_preview_axis_label(desktop, x_end_dt + Geom::Point(8.0, -8.0), _("机器 X+"),
+                                                         0x005522dd);
+    _plot_preview_axis_y_label = make_preview_axis_label(desktop, y_end_dt + Geom::Point(8.0, -8.0), _("机器 Y+"),
+                                                         0x225500dd);
+}
+
 void GrblControlPanel::sync_plot_preview_overlay()
 {
     clear_plot_preview_overlay();
@@ -2227,74 +2399,26 @@ void GrblControlPanel::sync_plot_preview_overlay()
     if (!desk || !doc) {
         return;
     }
-    auto params = make_export_params_from_preferences();
-    auto ctx = make_export_context(*this, desk);
+    Inkscape::Axidraw::GrblExportParams params;
+    Inkscape::Axidraw::GrblExportContext ctx;
+    prepare_export_settings(desk, params, ctx);
 
-    constexpr std::size_t k_preview_max_strokes = 12000;
     Geom::Affine const aff = desk->doc2dt();
     Glib::ustring status_note;
 
-    if (_chk_canvas_plot_preview.get_active()) {
-        Geom::PathVector pv_doc;
-        std::string err;
-        std::size_t included = 0;
-        std::size_t total = 0;
-        if (!build_grbl_plot_preview_pathvector(doc, params, ctx, pv_doc, err, k_preview_max_strokes, &included,
-                                                &total)) {
-            post_status(make_preview_build_error(err, false), true);
-            if (!_chk_machine_space_preview.get_active()) {
-                return;
-            }
-        } else if (!pv_doc.empty()) {
-            _plot_preview_overlay = make_canvasitem<CanvasItemBpath>(desk->getCanvasTemp(),
-                                                                     transform_pathvector_to_desktop(pv_doc, aff), true);
-            configure_preview_overlay(*_plot_preview_overlay, 0x22aaffcc, 1.0);
-            status_note = build_preview_status_note(false, included, total, false);
-        }
+    bool const doc_preview_ok = build_document_preview_overlay(doc, desk, params, ctx, aff, status_note);
+    if (!doc_preview_ok && !_chk_machine_space_preview.get_active()) {
+        return;
     }
 
+    if (!build_machine_preview_overlay(doc, desk, params, ctx, aff, status_note)) {
+        return;
+    }
     if (!_chk_machine_space_preview.get_active()) {
         return;
     }
 
-    Geom::PathVector pv_m;
-    std::string err_m;
-    bool clip_approx = false;
-    std::size_t inc_m = 0;
-    std::size_t tot_m = 0;
-    if (!build_grbl_plot_machine_preview_pathvector_in_doc_space(doc, params, ctx, pv_m, err_m, &clip_approx,
-                                                                 k_preview_max_strokes, &inc_m, &tot_m)) {
-        post_status(make_preview_build_error(err_m, true), true);
-        return;
-    }
-    if (!pv_m.empty()) {
-        _plot_preview_machine_overlay = make_canvasitem<CanvasItemBpath>(
-            desk->getCanvasTemp(), transform_pathvector_to_desktop(pv_m, aff), true);
-        configure_preview_overlay(*_plot_preview_machine_overlay, 0xff8844cc, 1.25);
-        status_note = build_preview_status_note(true, inc_m, tot_m, clip_approx);
-    }
-
-    double const bed_w = std::max(1.0, _bed_width_spin.get_value());
-    double const bed_h = std::max(1.0, _bed_depth_spin.get_value());
-    Geom::Point const origin_dt = Geom::Point(0.0, 0.0) * aff;
-    double const axis_len_doc = std::max(18.0, std::min(bed_w, bed_h) * 0.14);
-
-    auto const x_dir_doc = machine_axis_direction(params.swap_xy, params.invert_x, params.invert_y, true);
-    auto const y_dir_doc = machine_axis_direction(params.swap_xy, params.invert_x, params.invert_y, false);
-    Geom::Point const x_end_dt = (Geom::Point(0.0, 0.0) + x_dir_doc * axis_len_doc) * aff;
-    Geom::Point const y_end_dt = (Geom::Point(0.0, 0.0) + y_dir_doc * axis_len_doc) * aff;
-    Geom::PathVector axis_pv;
-    append_axis_arrow(axis_pv, origin_dt, x_end_dt, 12.0, 5.0);
-    append_axis_arrow(axis_pv, origin_dt, y_end_dt, 12.0, 5.0);
-    _plot_preview_machine_axis_overlay = make_canvasitem<CanvasItemBpath>(desk->getCanvasTemp(), axis_pv, true);
-    configure_preview_overlay(*_plot_preview_machine_axis_overlay, 0x00aa55ee, 2.0);
-
-    _plot_preview_axis_origin_label = make_preview_axis_label(desk, origin_dt + Geom::Point(8.0, -8.0), _("机器原点"),
-                                                              0x003344dd);
-    _plot_preview_axis_x_label = make_preview_axis_label(desk, x_end_dt + Geom::Point(8.0, -8.0), _("机器 X+"),
-                                                         0x005522dd);
-    _plot_preview_axis_y_label = make_preview_axis_label(desk, y_end_dt + Geom::Point(8.0, -8.0), _("机器 Y+"),
-                                                         0x225500dd);
+    build_machine_axis_overlay(desk, params, aff);
     if (!status_note.empty()) {
         post_status(status_note, false);
     }
@@ -2310,12 +2434,11 @@ void GrblControlPanel::on_fill_gcode_from_document()
     }
     SPDocument *doc = nullptr;
     SPDesktop *desktop = nullptr;
-    if (!require_active_plot_target(doc, desktop)) {
+    Inkscape::Axidraw::GrblExportParams params;
+    Inkscape::Axidraw::GrblExportContext ctx;
+    if (!prepare_active_export_target(doc, desktop, params, ctx)) {
         return;
     }
-
-    auto params = make_export_params_from_preferences();
-    auto ctx = make_export_context(*this, desktop);
 
     std::string out;
     std::string err;
@@ -2342,11 +2465,11 @@ void GrblControlPanel::on_send_document_direct()
     }
     SPDocument *doc = nullptr;
     SPDesktop *desktop = nullptr;
-    if (!require_active_plot_target(doc, desktop)) {
+    Inkscape::Axidraw::GrblExportParams params;
+    Inkscape::Axidraw::GrblExportContext base_ctx;
+    if (!prepare_active_export_target(doc, desktop, params, base_ctx)) {
         return;
     }
-
-    auto params = make_export_params_from_preferences();
 
     if (!_port || !_port->is_open()) {
         if (_tcp_port && _tcp_port->is_open()) {
@@ -2358,7 +2481,6 @@ void GrblControlPanel::on_send_document_direct()
         return;
     }
 
-    auto base_ctx = make_export_context(*this, desktop);
     bool const use_current_layer_without_selection = base_ctx.use_current_layer_without_selection;
     auto *selection = base_ctx.selection;
     refresh_plot_feedback_after_gcode_change();
@@ -3167,10 +3289,10 @@ void GrblControlPanel::build_ui()
     _tool_change_x_spin.signal_value_changed().connect([this] { save_mapping_preferences_from_ui(true); });
     _tool_change_y_spin.signal_value_changed().connect([this] { save_mapping_preferences_from_ui(true); });
     if (auto const buf = _start_gcode_view.get_buffer()) {
-        buf->signal_changed().connect([this] { save_mapping_preferences_from_ui(true); });
+        buf->signal_changed().connect([this] { save_mapping_preferences_from_ui(false); });
     }
     if (auto const buf = _end_gcode_view.get_buffer()) {
-        buf->signal_changed().connect([this] { save_mapping_preferences_from_ui(true); });
+        buf->signal_changed().connect([this] { save_mapping_preferences_from_ui(false); });
     }
     _btn_read_radio_mode.signal_clicked().connect([this] {
         run_action([this](std::string &e) {

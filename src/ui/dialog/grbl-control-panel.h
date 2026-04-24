@@ -35,6 +35,8 @@ namespace Inkscape::Axidraw {
 class SerialPort;
 class TcpPort;
 struct GrblProbeResult;
+struct GrblExportParams;
+struct GrblExportContext;
 } // namespace Inkscape::Axidraw
 
 class SPPage;
@@ -98,6 +100,7 @@ private:
     bool begin_firmware_sync();
     void finish_gcode_stream_ui();
     void set_controls_sensitive_for_gcode_stream(bool allow);
+    void update_action_button_labels();
     void update_connection_controls();
     enum class BusyReasonContext { generic, export_action, send_action };
     Glib::ustring get_busy_reason_for_phase(RuntimePhase phase, BusyReasonContext context) const;
@@ -121,17 +124,37 @@ private:
     void refresh_plot_summaries();
     bool is_plot_feedback_blocked() const;
     bool require_active_plot_target(SPDocument *&doc, SPDesktop *&desktop, bool clear_preview_on_failure = true);
+    void prepare_export_settings(SPDesktop *desktop, Inkscape::Axidraw::GrblExportParams &params,
+                                 Inkscape::Axidraw::GrblExportContext &ctx);
+    bool prepare_active_export_target(SPDocument *&doc, SPDesktop *&desktop, Inkscape::Axidraw::GrblExportParams &params,
+                                      Inkscape::Axidraw::GrblExportContext &ctx, bool clear_preview_on_failure = true);
     void refresh_plot_feedback_after_gcode_change();
     Gtk::Window *get_dialog_parent_window(char const *missing_parent_message);
     bool get_editor_gcode_text(std::string &text, bool send_from_cursor = false, guint *editor_line_1 = nullptr);
     void update_page_restore_button();
+    bool get_configured_bed_size_mm(double &bed_width_mm, double &bed_height_mm) const;
+    bool prepare_document_bed_action(SPDocument *&doc, Geom::Rect &bounds, double &bed_w_doc, double &bed_h_doc,
+                                     Glib::ustring &error, Glib::ustring const &empty_message) const;
     SPPage *get_target_page(SPDocument *doc) const;
     void request_canvas_redraw() const;
     void capture_page_restore_state(SPDocument *doc);
     void clear_page_restore_state();
     void apply_document_and_page_size_px(SPDocument *doc, double doc_width_px, double doc_height_px, double page_width_px,
                                          double page_height_px);
+    bool sync_document_page_to_bed_mm(SPDocument *doc, double width_mm, double height_mm, bool &unit_synced_out);
+    enum class DocumentGeometryChange { sync_page_to_bed, fit_to_bed, center_to_bed, restore_page };
+    void finalize_document_geometry_change(SPDocument *doc, DocumentGeometryChange change, bool refresh_preview = true);
     bool has_plot_preview_enabled() const;
+    bool build_document_preview_overlay(SPDocument *doc, SPDesktop *desktop,
+                                        Inkscape::Axidraw::GrblExportParams const &params,
+                                        Inkscape::Axidraw::GrblExportContext const &ctx,
+                                        Geom::Affine const &affine, Glib::ustring &status_note);
+    bool build_machine_preview_overlay(SPDocument *doc, SPDesktop *desktop,
+                                       Inkscape::Axidraw::GrblExportParams const &params,
+                                       Inkscape::Axidraw::GrblExportContext const &ctx,
+                                       Geom::Affine const &affine, Glib::ustring &status_note);
+    void build_machine_axis_overlay(SPDesktop *desktop, Inkscape::Axidraw::GrblExportParams const &params,
+                                    Geom::Affine const &affine);
     void schedule_plot_feedback_refresh(bool refresh_preview = true);
     void refresh_plot_feedback(bool refresh_preview = true);
     bool begin_gcode_stream_ui(Glib::ustring const &status);
