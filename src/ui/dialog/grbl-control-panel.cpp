@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 #include <mutex>
+#include <type_traits>
 #include <vector>
 
 #include <glib.h>
@@ -120,6 +121,9 @@ Geom::Point machine_axis_direction(bool swap_xy, bool invert_x, bool invert_y, b
 }
 
 Glib::ustring make_preview_summary(bool machine_space, std::size_t included, std::size_t total, bool clip_approx);
+bool get_air_travel_ratio_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::ustring &ratio_out);
+bool get_plot_bounds_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::ustring &bounds_out);
+bool get_plot_lengths_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::ustring &lengths_out);
 
 Glib::ustring format_duration_compact(double seconds)
 {
@@ -171,6 +175,29 @@ bool should_skip_gcode_line(std::string const &s)
     return false;
 }
 
+template <typename Func>
+void for_each_executable_gcode_line(std::string const &text, Func &&func)
+{
+    std::istringstream in(text);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        trim_in_place(line);
+        if (should_skip_gcode_line(line)) {
+            continue;
+        }
+        if constexpr (std::is_same_v<std::invoke_result_t<Func &, std::string const &>, bool>) {
+            if (!func(line)) {
+                break;
+            }
+        } else {
+            func(line);
+        }
+    }
+}
+
 std::string detect_radio_mode_from_reply(std::string reply)
 {
     for (auto &c : reply) {
@@ -207,26 +234,22 @@ constexpr std::size_t k_max_gcode_stream_lines = 200000;
 std::size_t count_executable_gcode_lines(std::string const &text)
 {
     std::size_t n = 0;
-    std::istringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        trim_in_place(line);
-        if (should_skip_gcode_line(line)) {
-            continue;
-        }
-        ++n;
-        if (n > k_max_gcode_stream_lines) {
-            return k_max_gcode_stream_lines + 1;
-        }
+    bool const finished = [&] {
+        for_each_executable_gcode_line(text, [&](std::string const &) {
+            ++n;
+            return n <= k_max_gcode_stream_lines;
+        });
+        return n <= k_max_gcode_stream_lines;
+    }();
+    if (!finished) {
+        return k_max_gcode_stream_lines + 1;
     }
     return n;
 }
 
 constexpr int k_gcode_send_progress_min_interval_ms = 350;
 constexpr std::size_t k_gcode_send_progress_line_stride = 80;
+constexpr std::size_t k_preview_max_strokes = 12000;
 
 constexpr auto k_pref_device = "/options/grbl/serial-device";
 constexpr auto k_pref_baud = "/options/grbl/baud";
@@ -418,16 +441,15 @@ void set_markup_message(Gtk::Label &label, Glib::ustring const &title, Glib::ust
     label.set_markup(Glib::ustring::compose("<b>%1</b>\n%2", title, Glib::Markup::escape_text(message)));
 }
 
-void set_layout_scale_summary_from_stats(Gtk::Label &label, Inkscape::Axidraw::GrblPlotStats const &stats,
-                                         double bed_width_mm, double bed_height_mm)
+Glib::ustring build_layout_scale_summary_markup(Inkscape::Axidraw::GrblPlotStats const &stats, double bed_width_mm,
+                                                double bed_height_mm)
 {
     LayoutScaleMetrics metrics;
     Glib::ustring error;
     if (!stats.has_bounds_mm ||
         !get_layout_scale_metrics_from_bounds_mm(stats.max_x_mm - stats.min_x_mm, stats.max_y_mm - stats.min_y_mm,
                                                  bed_width_mm, bed_height_mm, metrics, error)) {
-        set_markup_message(label, _("当前缩放"), error);
-        return;
+        return Glib::ustring::compose("<b>%1</b>\n%2", _("当前缩放"), Glib::Markup::escape_text(error));
     }
 
     std::ostringstream out;
@@ -447,7 +469,13 @@ void set_layout_scale_summary_from_stats(Gtk::Label &label, Inkscape::Axidraw::G
     } else {
         out << std::fixed << std::setprecision(1) << (metrics.fit_scale * 100.0) << "%";
     }
-    label.set_markup(out.str());
+    return out.str();
+}
+
+void set_layout_scale_summary_from_stats(Gtk::Label &label, Inkscape::Axidraw::GrblPlotStats const &stats,
+                                         double bed_width_mm, double bed_height_mm)
+{
+    label.set_markup(build_layout_scale_summary_markup(stats, bed_width_mm, bed_height_mm));
 }
 
 void set_no_active_document_summaries(Gtk::Label &job_summary, Gtk::Label &layout_scale_summary)
@@ -462,6 +490,48 @@ void set_analysis_error_summaries(Gtk::Label &job_summary, Gtk::Label &layout_sc
     auto const scale_message = err.empty() ? _("当前无法估算缩放信息。") : Glib::ustring(err);
     set_markup_message(job_summary, _("任务概览"), job_message);
     set_markup_message(layout_scale_summary, _("当前缩放"), scale_message);
+}
+
+Glib::ustring build_job_summary_markup(Inkscape::Axidraw::GrblPlotStats const &stats, double bed_width_mm,
+                                       double bed_height_mm)
+{
+    std::ostringstream summary;
+    summary << "<b>任务概览</b>\n";
+    summary << _("图层数：") << stats.layer_count << _(" 个");
+    summary << "    " << _("笔画数：") << stats.stroke_count << _(" 条");
+    if (stats.tool_change_count > 0) {
+        summary << "    " << _("换笔：") << stats.tool_change_count << _(" 次");
+    }
+    summary << "\n" << _("预计时长：") << Glib::Markup::escape_text(format_duration_compact(stats.estimated_duration_sec));
+
+    Glib::ustring bounds;
+    if (get_plot_bounds_text(stats, bounds)) {
+        summary << "    " << _("范围：") << bounds << " mm";
+    }
+
+    Glib::ustring lengths;
+    Glib::ustring ratio;
+    if (get_plot_lengths_text(stats, lengths) && get_air_travel_ratio_text(stats, ratio)) {
+        summary << "\n" << _("落笔/空走：") << lengths << " mm";
+        summary << "    " << _("空走占比：") << ratio << "%";
+    }
+
+    LayoutScaleMetrics metrics;
+    Glib::ustring layout_error;
+    if (stats.has_bounds_mm &&
+        get_layout_scale_metrics_from_bounds_mm(stats.max_x_mm - stats.min_x_mm, stats.max_y_mm - stats.min_y_mm,
+                                                bed_width_mm, bed_height_mm, metrics, layout_error)) {
+        summary << "\n" << _("适配缩放：");
+        if (metrics.fits_without_scaling) {
+            summary << _("无需缩小");
+        } else {
+            summary << std::fixed << std::setprecision(1) << (metrics.fit_scale * 100.0) << "%";
+        }
+        summary << "    " << _("床面占用：X ") << std::fixed << std::setprecision(1) << metrics.fill_x_pct << "%";
+        summary << " / Y " << std::fixed << std::setprecision(1) << metrics.fill_y_pct << "%";
+    }
+
+    return summary.str();
 }
 
 Geom::PathVector transform_pathvector_to_desktop(Geom::PathVector const &paths, Geom::Affine const &affine)
@@ -567,27 +637,69 @@ Glib::ustring make_preview_summary(bool machine_space, std::size_t included, std
         static_cast<guint64>(included), static_cast<guint64>(total));
 }
 
+Glib::ustring build_preview_build_error_status(std::string const &err, bool machine_space)
+{
+    return make_preview_build_error(err, machine_space);
+}
+
+void update_preview_status_note(Glib::ustring &status_note, bool machine_space, std::size_t included,
+                                std::size_t total, bool clip_approx)
+{
+    status_note = build_preview_status_note(machine_space, included, total, clip_approx);
+}
+
+bool get_air_travel_ratio_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::ustring &ratio_out)
+{
+    if (!stats.has_length_stats) {
+        return false;
+    }
+    double const total = stats.draw_length_mm + stats.travel_length_mm;
+    if (!(total > 1e-9)) {
+        return false;
+    }
+    std::ostringstream ratio;
+    ratio << std::fixed << std::setprecision(1) << ((stats.travel_length_mm / total) * 100.0);
+    ratio_out = ratio.str();
+    return true;
+}
+
+bool get_plot_bounds_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::ustring &bounds_out)
+{
+    if (!stats.has_bounds_mm) {
+        return false;
+    }
+    std::ostringstream wxh;
+    wxh << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm) << " x "
+        << (stats.max_y_mm - stats.min_y_mm);
+    bounds_out = wxh.str();
+    return true;
+}
+
+bool get_plot_lengths_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::ustring &lengths_out)
+{
+    if (!stats.has_length_stats) {
+        return false;
+    }
+    std::ostringstream lengths;
+    lengths << std::fixed << std::setprecision(1) << stats.draw_length_mm << " / " << stats.travel_length_mm;
+    lengths_out = lengths.str();
+    return true;
+}
+
 Glib::ustring make_fill_gcode_status(std::size_t strokes, Inkscape::Axidraw::GrblPlotStats const &stats)
 {
-    if (stats.has_bounds_mm) {
-        std::ostringstream wxh;
-        wxh << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm) << " x "
-            << (stats.max_y_mm - stats.min_y_mm);
-        if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
-            double const total = stats.draw_length_mm + stats.travel_length_mm;
-            double const air = (stats.travel_length_mm / total) * 100.0;
-            std::ostringstream lengths;
-            lengths << std::fixed << std::setprecision(1) << stats.draw_length_mm << " / " << stats.travel_length_mm;
-            std::ostringstream ratio;
-            ratio << std::fixed << std::setprecision(1) << air;
+    Glib::ustring bounds;
+    if (get_plot_bounds_text(stats, bounds)) {
+        Glib::ustring lengths;
+        Glib::ustring ratio;
+        if (get_plot_lengths_text(stats, lengths) && get_air_travel_ratio_text(stats, ratio)) {
             return Glib::ustring::compose(
                 _("编辑器已填入 %1 条笔画，对应工作区域约 %2 mm，绘制/空走长度 %3 mm，空走占比 %4%%。请先检查，如有需要可“另存为 G-code”，然后再“发送到机器”。"),
-                static_cast<guint64>(strokes), Glib::ustring(wxh.str()), Glib::ustring(lengths.str()),
-                Glib::ustring(ratio.str()));
+                static_cast<guint64>(strokes), bounds, lengths, ratio);
         }
         return Glib::ustring::compose(
             _("编辑器已填入 %1 条笔画，对应工作区域约 %2 mm（按首选项换算后的机器坐标）。请先检查，如有需要可“另存为 G-code”，然后再“发送到机器”。"),
-            static_cast<guint64>(strokes), Glib::ustring(wxh.str()));
+            static_cast<guint64>(strokes), bounds);
     }
     return Glib::ustring::compose(_("编辑器已为 %1 条笔画生成 G-code。请先检查内容，确认后再“发送到机器”。"),
                                    static_cast<guint64>(strokes));
@@ -614,13 +726,10 @@ Glib::ustring make_direct_send_progress_status(std::size_t stroke_done, std::siz
 
 Glib::ustring make_direct_send_done_status(std::size_t strokes, Inkscape::Axidraw::GrblPlotStats const &stats)
 {
-    if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
-        double const total = stats.draw_length_mm + stats.travel_length_mm;
-        double const air = (stats.travel_length_mm / total) * 100.0;
-        std::ostringstream ratio;
-        ratio << std::fixed << std::setprecision(1) << air;
+    Glib::ustring ratio;
+    if (get_air_travel_ratio_text(stats, ratio)) {
         return Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画，空走占比约 %2%%。"),
-                                      static_cast<guint64>(strokes), Glib::ustring(ratio.str()));
+                                      static_cast<guint64>(strokes), ratio);
     }
     return Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画。"), static_cast<guint64>(strokes));
 }
@@ -742,6 +851,27 @@ Glib::ustring describe_probe_failure_ui(Glib::ustring const &device, int baud,
     }
     return Glib::ustring::compose(_("串口 %1（%2 波特）已有响应，但看起来不像 GRBL 控制器：\n%3"), device, baud,
                                   Glib::ustring(probe.response_line));
+}
+
+Glib::ustring describe_tcp_probe_failure_ui(Glib::ustring const &device,
+                                            Inkscape::Axidraw::GrblProbeResult const &probe)
+{
+    auto const detail = probe.response_line.empty()
+                            ? Glib::ustring(_("TCP 上没有收到 GRBL 响应。"))
+                            : Glib::ustring::compose(_("TCP 端点已有响应，但看起来不像 GRBL：\n%1"),
+                                                     Glib::ustring(probe.response_line));
+    return Glib::ustring::compose(_("无法连接到 %1。\n%2"), device, detail);
+}
+
+Glib::ustring describe_connect_open_failure_ui(bool use_tcp)
+{
+    return use_tcp ? Glib::ustring(_("无法打开所选 TCP 连接。")) : Glib::ustring(_("无法打开所选串口连接。"));
+}
+
+Glib::ustring make_connect_probe_status(Glib::ustring const &device, int baud, bool use_tcp)
+{
+    return use_tcp ? Glib::ustring::compose(_("正在通过 TCP 探测 %1..."), device)
+                   : Glib::ustring::compose(_("正在以 %2 波特探测 %1..."), device, baud);
 }
 
 } // namespace
@@ -968,7 +1098,39 @@ void GrblControlPanel::refresh_runtime_ui_state()
     }
     _jog_dist.set_sensitive(allow_interaction);
     update_page_restore_button();
+    update_action_button_labels();
     update_connection_controls();
+}
+
+void GrblControlPanel::update_action_button_labels()
+{
+    auto const phase = get_runtime_phase();
+    bool const sending = phase == RuntimePhase::gcode_sending;
+    bool const cancelling = phase == RuntimePhase::gcode_cancelling;
+    bool const firmware_sync = phase == RuntimePhase::firmware_sync;
+
+    _btn_send_gcode.set_label(sending || cancelling ? _("发送中...") : _("发送到机器(_S)"));
+    _btn_send_from_drawing.set_label(sending || cancelling ? _("图稿发送中...") : _("从图稿直接发送"));
+    _btn_read_firmware.set_label(firmware_sync ? _("同步中...") : _("同步绘图机参数"));
+
+    if (sending || cancelling) {
+        _btn_send_gcode.set_tooltip_text(_("当前正在发送编辑器中的 G-code；如需停止，请使用旁边的“取消发送”。"));
+        _btn_send_from_drawing.set_tooltip_text(_("当前正在执行图稿直发；如需停止，请使用“取消发送”。"));
+    } else {
+        _btn_send_gcode.set_tooltip_text(
+            _("按顺序发送每一条非空行，并在发送下一行前等待 Grbl 返回 ok（或错误）。"
+              "长任务执行时，消息日志会更新大致的行数进度。"
+              "也可以只从光标所在行开始发送（见上方复选框）。"));
+        _btn_send_from_drawing.set_tooltip_text(
+            _("按当前绘图机首选项直接从当前文档生成 G-code，并立刻发送到已连接的绘图机。"));
+    }
+
+    if (firmware_sync) {
+        _btn_read_firmware.set_tooltip_text(_("正在读取 $I、$G、$#、$$ 并同步方向掩码、床面尺寸等信息。"));
+    } else {
+        _btn_read_firmware.set_tooltip_text(
+            _("读取 GRBL 固件信息（$I）、当前模态（$G）、偏移（$#）以及全部参数（$$），并同步方向掩码和床面尺寸。"));
+    }
 }
 
 void GrblControlPanel::set_connecting_state(bool const active)
@@ -1163,6 +1325,23 @@ void GrblControlPanel::finish_connect_attempt_ui(bool const keep_connect_active,
     post_status(status, is_error);
 }
 
+void GrblControlPanel::post_connection_status(Glib::ustring const &device,
+                                              Inkscape::Axidraw::GrblProbeResult const *const probe)
+{
+    if (!probe || probe->response_line.empty()) {
+        post_status(Glib::ustring::compose(_("已连接到 %1"), device), false);
+        return;
+    }
+
+    post_status(Glib::ustring::compose(_("已连接到 %1\n控制器：%2"), device, Glib::ustring(probe->response_line)), false);
+    post_machine_status(Glib::ustring(probe->response_line));
+}
+
+void GrblControlPanel::post_not_connected_status(bool const serial_required)
+{
+    post_status(serial_required ? Glib::ustring(_("尚未连接串口绘图机。")) : Glib::ustring(_("尚未连接。")), true);
+}
+
 void GrblControlPanel::finalize_successful_connection_ui(Glib::ustring const &device,
                                                          Inkscape::Axidraw::GrblProbeResult const &probe)
 {
@@ -1172,13 +1351,7 @@ void GrblControlPanel::finalize_successful_connection_ui(Glib::ustring const &de
         return;
     }
 
-    if (probe.response_line.empty()) {
-        post_status(Glib::ustring::compose(_("已连接到 %1"), device), false);
-    } else {
-        post_status(Glib::ustring::compose(_("已连接到 %1\n控制器：%2"), device, Glib::ustring(probe.response_line)), false);
-        post_machine_status(Glib::ustring(probe.response_line));
-    }
-
+    post_connection_status(device, &probe);
     ensure_machine_status_poll(true);
     on_read_firmware_settings();
     schedule_plot_feedback_refresh(false);
@@ -1443,48 +1616,10 @@ void GrblControlPanel::refresh_plot_summaries()
         return;
     }
 
-    std::ostringstream summary;
-    summary << "<b>任务概览</b>\n";
-    summary << _("图层数：") << stats.layer_count << _(" 个");
-    summary << "    " << _("笔画数：") << stats.stroke_count << _(" 条");
-    if (stats.tool_change_count > 0) {
-        summary << "    " << _("换笔：") << stats.tool_change_count << _(" 次");
-    }
-    summary << "\n" << _("预计时长：") << Glib::Markup::escape_text(format_duration_compact(stats.estimated_duration_sec));
-    if (stats.has_bounds_mm) {
-        summary << "    " << _("范围：");
-        summary << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm) << " x "
-                << (stats.max_y_mm - stats.min_y_mm) << " mm";
-    }
-    if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
-        double const total = stats.draw_length_mm + stats.travel_length_mm;
-        double const air = (stats.travel_length_mm / total) * 100.0;
-        summary << "\n" << _("落笔/空走：");
-        summary << std::fixed << std::setprecision(1) << stats.draw_length_mm << " / " << stats.travel_length_mm
-                << " mm";
-        summary << "    " << _("空走占比：") << std::fixed << std::setprecision(1) << air << "%";
-    }
-
-    LayoutScaleMetrics metrics;
-    Glib::ustring layout_error;
-    if (stats.has_bounds_mm &&
-        get_layout_scale_metrics_from_bounds_mm(stats.max_x_mm - stats.min_x_mm, stats.max_y_mm - stats.min_y_mm,
-                                                _bed_width_spin.get_value(), _bed_depth_spin.get_value(), metrics,
-                                                layout_error)) {
-        summary << "\n" << _("适配缩放：");
-        if (metrics.fits_without_scaling) {
-            summary << _("无需缩小");
-        } else {
-            summary << std::fixed << std::setprecision(1) << (metrics.fit_scale * 100.0) << "%";
-        }
-        summary << "    " << _("床面占用：X ");
-        summary << std::fixed << std::setprecision(1) << metrics.fill_x_pct << "%";
-        summary << " / Y " << std::fixed << std::setprecision(1) << metrics.fill_y_pct << "%";
-    }
-
-    _job_summary.set_markup(summary.str());
-    set_layout_scale_summary_from_stats(_layout_scale_summary, stats, _bed_width_spin.get_value(),
-                                        _bed_depth_spin.get_value());
+    auto const bed_width_mm = _bed_width_spin.get_value();
+    auto const bed_height_mm = _bed_depth_spin.get_value();
+    _job_summary.set_markup(build_job_summary_markup(stats, bed_width_mm, bed_height_mm));
+    set_layout_scale_summary_from_stats(_layout_scale_summary, stats, bed_width_mm, bed_height_mm);
 }
 
 bool GrblControlPanel::has_plot_preview_enabled() const
@@ -1547,6 +1682,8 @@ bool GrblControlPanel::begin_gcode_stream_ui(Glib::ustring const &status)
     set_gcode_stream_ui_active(true);
     if (!status.empty()) {
         post_status(status, false);
+    } else {
+        post_status(_("正在发送编辑器中的 G-code..."), false);
     }
     return true;
 }
@@ -1736,7 +1873,7 @@ void GrblControlPanel::run_action(std::function<void(std::string &)> work, bool 
             return;
         }
         if (!link_is_open()) {
-            post_status(_("尚未连接。"), true);
+            post_not_connected_status();
             return;
         }
         std::string err;
@@ -1819,7 +1956,7 @@ void GrblControlPanel::on_read_firmware_settings()
         {
             std::lock_guard const guard(_port_mutex);
             if (!link_is_open()) {
-                post_status(_("尚未连接。"), true);
+                post_not_connected_status();
                 return;
             }
 
@@ -1983,11 +2120,7 @@ void GrblControlPanel::connect_toggle()
     }
     bool const use_tcp = !tcp_host.empty() && tcp_port > 0;
     set_connecting_state(true);
-    if (use_tcp) {
-        post_status(Glib::ustring::compose(_("正在通过 TCP 探测 %1..."), device_for_thread), false);
-    } else {
-        post_status(Glib::ustring::compose(_("正在以 %2 波特探测 %1..."), device_for_thread, baud), false);
-    }
+    post_status(make_connect_probe_status(device_for_thread, baud, use_tcp), false);
 
     // Run open/probe on a worker to avoid blocking UI if driver stalls.
     std::thread([this, device_for_thread, baud, use_tcp, tcp_host, tcp_port] {
@@ -1995,8 +2128,8 @@ void GrblControlPanel::connect_toggle()
         auto tcp = std::make_unique<Inkscape::Axidraw::TcpPort>();
         bool const opened = use_tcp ? tcp->open(tcp_host, tcp_port) : port->open(device_for_thread.raw(), baud);
         if (!opened) {
-            Glib::signal_idle().connect_once(sigc::track_object([this] {
-                finish_connect_attempt_ui(false, _("无法打开所选连接。"), true);
+            Glib::signal_idle().connect_once(sigc::track_object([this, use_tcp] {
+                finish_connect_attempt_ui(false, describe_connect_open_failure_ui(use_tcp), true);
             }, *this));
             return;
         }
@@ -2004,17 +2137,8 @@ void GrblControlPanel::connect_toggle()
         auto const probe = use_tcp ? Inkscape::Axidraw::probe_open_grbl(*tcp) : Inkscape::Axidraw::probe_open_grbl(*port);
         if (!probe.ok) {
             Glib::signal_idle().connect_once(sigc::track_object([this, probe, baud, dev = Glib::ustring(device_for_thread)] {
-                Glib::ustring status;
-                if (dev.rfind("tcp://", 0) == 0) {
-                    Glib::ustring const detail = probe.response_line.empty()
-                                                     ? _("TCP 上没有收到 GRBL 响应。")
-                                                     : Glib::ustring::compose(
-                                                           _("TCP 端点已有响应，但看起来不像 GRBL：\n%1"),
-                                                           Glib::ustring(probe.response_line));
-                    status = Glib::ustring::compose(_("无法连接到 %1。\n%2"), dev, detail);
-                } else {
-                    status = describe_probe_failure_ui(dev, baud, probe);
-                }
+                auto const status = dev.rfind("tcp://", 0) == 0 ? describe_tcp_probe_failure_ui(dev, probe)
+                                                                 : describe_probe_failure_ui(dev, baud, probe);
                 finish_connect_attempt_ui(false, status, true, true);
             }, *this));
             return;
@@ -2242,10 +2366,14 @@ void GrblControlPanel::update_connection_controls()
 
     if (connecting) {
         _btn_connect.set_label(_("连接中..."));
+        _btn_connect.set_tooltip_text(_("正在打开连接并探测控制器，请稍候。"));
     } else if (_btn_connect.get_active()) {
         _btn_connect.set_label(_("断开连接"));
+        _btn_connect.set_tooltip_text(_("断开当前绘图机连接。"));
     } else {
         _btn_connect.set_label(_("连接"));
+        _btn_connect.set_tooltip_text(
+            _("连接当前选中的串口或网络控制器。连接成功后会自动读取一轮固件参数。"));
     }
 }
 
@@ -2476,7 +2604,7 @@ void GrblControlPanel::on_send_document_direct()
             post_status(_("“从图稿直接发送”目前仅支持串口直连的流式发送。网络连接请先“从图稿填充”，再发送编辑器中的 G-code。"),
                         true);
         } else {
-            post_status(_("尚未连接串口绘图机。"), true);
+            post_not_connected_status(true);
         }
         return;
     }
@@ -2713,7 +2841,7 @@ void GrblControlPanel::on_send_gcode()
             auto const finish = [this] { finish_gcode_stream_ui(); };
 
             if (!link_is_open()) {
-                post_status(_("尚未连接。"), true);
+                post_not_connected_status();
                 finish();
                 return;
             }
@@ -2765,28 +2893,27 @@ void GrblControlPanel::on_send_gcode()
             };
 
             std::string err;
+            bool write_failed = false;
             std::size_t sent = 0;
-            std::istringstream in(text);
-            std::string line;
-            while (std::getline(in, line)) {
-                if (!line.empty() && line.back() == '\r') {
-                    line.pop_back();
-                }
-                trim_in_place(line);
-                if (should_skip_gcode_line(line)) {
-                    continue;
+            for_each_executable_gcode_line(text, [&](std::string const &line) {
+                if (!err.empty() || write_failed) {
+                    return;
                 }
                 if (sent >= k_max_gcode_stream_lines) {
                     err = _("G-code 行数过多（已超出限制）。");
-                    break;
+                    return;
                 }
                 if (!link_write_line(line, err)) {
-                    post_gcode_stream_result(err);
-                    finish();
+                    write_failed = true;
                     return;
                 }
                 ++sent;
                 try_send_progress(sent, false);
+            });
+            if (write_failed) {
+                post_gcode_stream_result(err);
+                finish();
+                return;
             }
             if (!err.empty()) {
                 post_gcode_stream_result(err);

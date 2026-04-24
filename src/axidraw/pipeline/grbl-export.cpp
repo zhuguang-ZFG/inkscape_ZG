@@ -48,20 +48,70 @@ using Inkscape::Util::Quantity;
 using Inkscape::Util::Unit;
 using Inkscape::Util::UnitTable;
 
-Unit const *document_linear_unit(SPDocument *doc)
-{
-    if (auto *nv = doc->getNamedView()) {
-        if (auto *u = nv->getDisplayUnit()) {
-            return u;
-        }
-    }
-    return UnitTable::get().getUnit("px");
-}
+constexpr double k_mm_per_in = 25.4;
+constexpr double k_px_per_in = 96.0;
+constexpr double k_mm_per_px = k_mm_per_in / k_px_per_in;
+constexpr double k_machine_coord_epsilon_mm = 1e-3;
 
-Geom::Point to_mm(Geom::Point const &p, Unit const *from)
+struct DocumentMmMapper {
+    double origin_x_doc = 0.0;
+    double origin_y_doc = 0.0;
+    double mm_per_doc_x = 0.0;
+    double mm_per_doc_y = 0.0;
+
+    [[nodiscard]] bool valid() const
+    {
+        return mm_per_doc_x > 0.0 && mm_per_doc_y > 0.0;
+    }
+
+    [[nodiscard]] Geom::Point doc_to_mm(Geom::Point const &p) const
+    {
+        return {(p[Geom::X] - origin_x_doc) * mm_per_doc_x,
+                (p[Geom::Y] - origin_y_doc) * mm_per_doc_y};
+    }
+
+    [[nodiscard]] Geom::Point mm_to_doc(Geom::Point const &p) const
+    {
+        return {origin_x_doc + p[Geom::X] / mm_per_doc_x,
+                origin_y_doc + p[Geom::Y] / mm_per_doc_y};
+    }
+
+    [[nodiscard]] double avg_doc_units_per_mm() const
+    {
+        return 0.5 * ((1.0 / mm_per_doc_x) + (1.0 / mm_per_doc_y));
+    }
+};
+
+DocumentMmMapper build_document_mm_mapper(SPDocument *doc)
 {
-    Unit const *mm = UnitTable::get().getUnit("mm");
-    return {Quantity::convert(p[Geom::X], from, mm), Quantity::convert(p[Geom::Y], from, mm)};
+    DocumentMmMapper mapper;
+    if (!doc) {
+        return mapper;
+    }
+
+    auto const viewbox = doc->getViewBox();
+    auto const page_px = doc->getDimensions();
+    double const page_w_mm = page_px[Geom::X] * k_mm_per_px;
+    double const page_h_mm = page_px[Geom::Y] * k_mm_per_px;
+
+    if (viewbox.width() > 1e-9 && page_w_mm > 1e-9) {
+        mapper.origin_x_doc = viewbox.left();
+        mapper.mm_per_doc_x = page_w_mm / viewbox.width();
+    }
+    if (viewbox.height() > 1e-9 && page_h_mm > 1e-9) {
+        mapper.origin_y_doc = viewbox.top();
+        mapper.mm_per_doc_y = page_h_mm / viewbox.height();
+    }
+
+    if (!mapper.valid()) {
+        double const px_to_mm = k_mm_per_px;
+        mapper.origin_x_doc = 0.0;
+        mapper.origin_y_doc = 0.0;
+        mapper.mm_per_doc_x = px_to_mm;
+        mapper.mm_per_doc_y = px_to_mm;
+    }
+
+    return mapper;
 }
 
 void append_stroke_from_path(Geom::Path const &pit, std::vector<std::vector<Geom::Point>> &strokes_doc)
@@ -406,11 +456,10 @@ static double document_page_height_mm(SPDocument *doc)
     if (!doc) {
         return 0;
     }
-    Unit const *mm = UnitTable::get().getUnit("mm");
-    return doc->getHeight().value(mm);
+    return doc->getDimensions()[Geom::Y] * k_mm_per_px;
 }
 
-static void strokes_doc_to_mm(std::vector<std::vector<Geom::Point>> const &strokes_doc, Unit const *from,
+static void strokes_doc_to_mm(std::vector<std::vector<Geom::Point>> const &strokes_doc, DocumentMmMapper const &mapper,
                               std::vector<std::vector<Geom::Point>> &strokes_mm)
 {
     strokes_mm.clear();
@@ -422,7 +471,7 @@ static void strokes_doc_to_mm(std::vector<std::vector<Geom::Point>> const &strok
         std::vector<Geom::Point> mm;
         mm.reserve(st.size());
         for (auto const &p : st) {
-            mm.push_back(to_mm(p, from));
+            mm.push_back(mapper.doc_to_mm(p));
         }
         strokes_mm.push_back(std::move(mm));
     }
@@ -1186,7 +1235,7 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
         return false;
     }
 
-    Unit const *from = document_linear_unit(doc);
+    auto const mapper = build_document_mm_mapper(doc);
 
     if (wants_layered_pause(params, ctx)) {
         std::vector<std::vector<std::vector<Geom::Point>>> layers_doc;
@@ -1199,7 +1248,7 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
                 if (params.optimize_stroke_order && layer_doc.size() > 1) {
                     reorder_strokes_nearest_neighbor(layer_doc, params.optimize_stroke_direction);
                 }
-                strokes_doc_to_mm(layer_doc, from, prep.layers_mm[i]);
+                strokes_doc_to_mm(layer_doc, mapper, prep.layers_mm[i]);
                 if (params.contour_to_hatch) {
                     convert_closed_contours_to_hatch(prep.layers_mm[i], params.hatch_spacing_mm);
                 }
@@ -1275,7 +1324,7 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
         return false;
     }
 
-    strokes_doc_to_mm(strokes_doc, from, prep.flat_mm);
+    strokes_doc_to_mm(strokes_doc, mapper, prep.flat_mm);
     if (params.contour_to_hatch) {
         convert_closed_contours_to_hatch(prep.flat_mm, params.hatch_spacing_mm);
     }
@@ -1523,8 +1572,10 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
             return false;
         }
 
-        if (!emit_line(format_xy_mm(stroke.front(), "G0", params.feed_travel_mm_min))) {
-            return false;
+        if (!has_prev_end || !Geom::are_near(stroke.front(), prev_end, k_machine_coord_epsilon_mm)) {
+            if (!emit_line(format_xy_mm(stroke.front(), "G0", params.feed_travel_mm_min))) {
+                return false;
+            }
         }
 
         if (!emit_line(pen_dn.raw())) {
@@ -1603,8 +1654,10 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
             if (!emit_line((use_long_pen_up ? long_pen_up : pen_up).raw())) {
                 return false;
             }
-            if (!emit_line(format_xy_mm(stroke.front(), "G0", params.feed_travel_mm_min))) {
-                return false;
+            if (!has_last || !Geom::are_near(stroke.front(), last_mm, k_machine_coord_epsilon_mm)) {
+                if (!emit_line(format_xy_mm(stroke.front(), "G0", params.feed_travel_mm_min))) {
+                    return false;
+                }
             }
             if (!emit_line(pen_dn.raw())) {
                 return false;
@@ -1895,9 +1948,8 @@ static bool collect_preview_doc_strokes(SPDocument *doc, GrblExportParams const 
                     reorder_strokes_nearest_neighbor(layer_doc, params.optimize_stroke_direction);
                 }
                 if (params.contour_to_hatch) {
-                    Unit const *from = document_linear_unit(doc);
-                    Unit const *mm = UnitTable::get().getUnit("mm");
-                    double const spacing_doc = Quantity::convert(params.hatch_spacing_mm, mm, from);
+                    auto const mapper = build_document_mm_mapper(doc);
+                    double const spacing_doc = params.hatch_spacing_mm * mapper.avg_doc_units_per_mm();
                     convert_closed_contours_to_hatch(layer_doc, spacing_doc);
                 }
                 for (auto &st : layer_doc) {
@@ -1924,9 +1976,8 @@ static bool collect_preview_doc_strokes(SPDocument *doc, GrblExportParams const 
         reorder_strokes_nearest_neighbor(strokes_doc, params.optimize_stroke_direction);
     }
     if (params.contour_to_hatch) {
-        Unit const *from = document_linear_unit(doc);
-        Unit const *mm = UnitTable::get().getUnit("mm");
-        double const spacing_doc = Quantity::convert(params.hatch_spacing_mm, mm, from);
+        auto const mapper = build_document_mm_mapper(doc);
+        double const spacing_doc = params.hatch_spacing_mm * mapper.avg_doc_units_per_mm();
         convert_closed_contours_to_hatch(strokes_doc, spacing_doc);
     }
     constexpr std::size_t max_strokes = 200000;
@@ -2003,7 +2054,7 @@ static void flatten_prep_strokes_mm(PreparedPlotMm const &prep, std::vector<std:
     }
 }
 
-static Geom::Point mm_after_plot_mapping_toward_doc(Geom::Point mm, Unit const *doc_unit, PreparedPlotMm const &meta)
+static Geom::Point mm_after_plot_mapping_toward_doc(Geom::Point mm, DocumentMmMapper const &mapper, PreparedPlotMm const &meta)
 {
     if (meta.preview_align_applied) {
         mm[Geom::X] += meta.preview_align_shift_x_mm;
@@ -2012,8 +2063,7 @@ static Geom::Point mm_after_plot_mapping_toward_doc(Geom::Point mm, Unit const *
     if (meta.preview_flip_y_applied && meta.preview_page_h_mm > 0) {
         mm[Geom::Y] = meta.preview_page_h_mm - mm[Geom::Y];
     }
-    Unit const *mm_u = UnitTable::get().getUnit("mm");
-    return {Quantity::convert(mm[Geom::X], mm_u, doc_unit), Quantity::convert(mm[Geom::Y], mm_u, doc_unit)};
+    return mapper.mm_to_doc(mm);
 }
 
 bool build_grbl_plot_machine_preview_pathvector_in_doc_space(SPDocument *doc, GrblExportParams const &params,
@@ -2061,7 +2111,7 @@ bool build_grbl_plot_machine_preview_pathvector_in_doc_space(SPDocument *doc, Gr
         return false;
     }
 
-    Unit const *doc_u = document_linear_unit(doc);
+    auto const mapper = build_document_mm_mapper(doc);
     std::size_t const total = strokes_mm.size();
     if (strokes_total_out) {
         *strokes_total_out = total;
@@ -2070,9 +2120,9 @@ bool build_grbl_plot_machine_preview_pathvector_in_doc_space(SPDocument *doc, Gr
     for (std::size_t i = 0; i < limit; ++i) {
         auto const &st = strokes_mm[i];
         Geom::Path pat;
-        pat.start(mm_after_plot_mapping_toward_doc(st[0], doc_u, prep));
+        pat.start(mm_after_plot_mapping_toward_doc(st[0], mapper, prep));
         for (std::size_t j = 1; j < st.size(); ++j) {
-            pat.appendNew<Geom::LineSegment>(mm_after_plot_mapping_toward_doc(st[j], doc_u, prep));
+            pat.appendNew<Geom::LineSegment>(mm_after_plot_mapping_toward_doc(st[j], mapper, prep));
         }
         paths_out.push_back(std::move(pat));
     }

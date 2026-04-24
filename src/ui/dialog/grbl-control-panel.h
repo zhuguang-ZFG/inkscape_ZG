@@ -118,6 +118,8 @@ private:
     void finish_connect_attempt_ui(bool keep_connect_active, Glib::ustring const &status, bool is_error,
                                    bool clear_machine_status = false);
     void finalize_successful_connection_ui(Glib::ustring const &device, Inkscape::Axidraw::GrblProbeResult const &probe);
+    void post_connection_status(Glib::ustring const &device, Inkscape::Axidraw::GrblProbeResult const *probe = nullptr);
+    void post_not_connected_status(bool serial_required = false);
     void load_mapping_preferences_to_ui();
     void save_mapping_preferences_from_ui(bool refresh_preview = true);
     void update_tool_change_mode_ui();
