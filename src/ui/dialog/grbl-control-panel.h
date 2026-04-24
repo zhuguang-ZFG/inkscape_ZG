@@ -34,7 +34,10 @@
 namespace Inkscape::Axidraw {
 class SerialPort;
 class TcpPort;
+struct GrblProbeResult;
 } // namespace Inkscape::Axidraw
+
+class SPPage;
 
 namespace Inkscape::UI::Dialog {
 
@@ -45,6 +48,14 @@ public:
     ~GrblControlPanel() final;
 
 private:
+    enum class RuntimePhase {
+        idle,
+        connecting,
+        firmware_sync,
+        gcode_sending,
+        gcode_cancelling,
+    };
+
     void build_ui();
     void on_map() override;
     void on_unmap() override;
@@ -67,6 +78,7 @@ private:
     void on_send_document_direct();
     void on_fit_document_to_bed();
     void on_center_document_to_bed();
+    void on_restore_page_size();
     void on_fill_gcode_from_document();
     void on_read_firmware_settings();
     void on_load_gcode_from_file();
@@ -74,20 +86,51 @@ private:
     void on_cancel_gcode_stream();
     void clear_plot_preview_overlay();
     void sync_plot_preview_overlay();
+    void set_gcode_stream_ui_active(bool active);
+    bool set_gcode_cancel_requested(bool active);
+    void set_connecting_state(bool active);
+    void set_firmware_syncing_state(bool active);
+    void update_mapping_control_sensitivity(bool allow_interaction = true);
+    bool is_runtime_busy() const;
+    bool has_active_gcode_stream() const;
+    RuntimePhase get_runtime_phase() const;
+    void refresh_runtime_ui_state();
+    bool begin_firmware_sync();
     void finish_gcode_stream_ui();
     void set_controls_sensitive_for_gcode_stream(bool allow);
     void update_connection_controls();
+    enum class BusyReasonContext { generic, export_action, send_action };
+    Glib::ustring get_busy_reason_for_phase(RuntimePhase phase, BusyReasonContext context) const;
+    bool get_busy_reason(bool block_connecting, bool block_firmware_sync, bool block_gcode_sending,
+                         Glib::ustring &reason) const;
+    bool is_machine_command_blocked(Glib::ustring &reason) const;
+    bool is_export_operation_blocked(Glib::ustring &reason) const;
 
     void refresh_port_list();
     void on_port_combo_changed();
     void ensure_machine_status_poll(bool on);
     bool on_machine_status_poll_timeout();
     void post_machine_status(Glib::ustring const &text);
+    void disconnect_controller(bool announce_status);
+    void finish_connect_attempt_ui(bool keep_connect_active, Glib::ustring const &status, bool is_error,
+                                   bool clear_machine_status = false);
+    void finalize_successful_connection_ui(Glib::ustring const &device, Inkscape::Axidraw::GrblProbeResult const &probe);
     void load_mapping_preferences_to_ui();
     void save_mapping_preferences_from_ui(bool refresh_preview = true);
     void update_tool_change_mode_ui();
-    void refresh_job_summary();
-    void refresh_layout_scale_summary();
+    void refresh_plot_summaries();
+    bool is_plot_feedback_blocked() const;
+    bool require_active_plot_target(SPDocument *&doc, SPDesktop *&desktop, bool clear_preview_on_failure = true);
+    void refresh_plot_feedback_after_gcode_change();
+    Gtk::Window *get_dialog_parent_window(char const *missing_parent_message);
+    bool get_editor_gcode_text(std::string &text, bool send_from_cursor = false, guint *editor_line_1 = nullptr);
+    void update_page_restore_button();
+    SPPage *get_target_page(SPDocument *doc) const;
+    void request_canvas_redraw() const;
+    void capture_page_restore_state(SPDocument *doc);
+    void clear_page_restore_state();
+    void apply_document_and_page_size_px(SPDocument *doc, double doc_width_px, double doc_height_px, double page_width_px,
+                                         double page_height_px);
     bool has_plot_preview_enabled() const;
     void schedule_plot_feedback_refresh(bool refresh_preview = true);
     void refresh_plot_feedback(bool refresh_preview = true);
@@ -113,6 +156,12 @@ private:
     bool _suspend_port_combo{false};
     bool _suspend_mapping_sync{false};
     bool _plot_feedback_refresh_preview_requested{false};
+    bool _plot_feedback_refresh_dispatch_pending{false};
+    bool _has_saved_page_restore{false};
+    double _saved_doc_width_px{0.0};
+    double _saved_doc_height_px{0.0};
+    double _saved_page_width_px{0.0};
+    double _saved_page_height_px{0.0};
 
     Gtk::Frame _frame;
     Gtk::Box _vbox{Gtk::Orientation::VERTICAL};
@@ -150,6 +199,7 @@ private:
     Gtk::Button _btn_clear_alarm;
     Gtk::Button _btn_fit_to_bed;
     Gtk::Button _btn_center_to_bed;
+    Gtk::Button _btn_restore_page_size;
     Gtk::CheckButton _chk_swap_xy;
     Gtk::CheckButton _chk_invert_x;
     Gtk::CheckButton _chk_invert_y;
