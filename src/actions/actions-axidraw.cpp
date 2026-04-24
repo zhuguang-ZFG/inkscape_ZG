@@ -35,7 +35,7 @@ using Inkscape::choose_file_save;
 
 namespace {
 
-const Glib::ustring SECTION = NC_("Action Section", "GRBL Plotter");
+const Glib::ustring SECTION = NC_("Action Section", "绘图机");
 
 void axidraw_plot(InkscapeApplication *app)
 {
@@ -47,7 +47,7 @@ void axidraw_plot(InkscapeApplication *app)
     auto *desktop = app->get_active_desktop();
     auto *win = app->get_active_window();
     if (!doc || !desktop || !win) {
-        sp_ui_error_dialog(_("No active document or window."));
+        sp_ui_error_dialog(_("当前没有活动文档或窗口。"));
         return;
     }
 
@@ -59,7 +59,7 @@ void axidraw_plot(InkscapeApplication *app)
         return;
     case Inkscape::Axidraw::GrblConnectAttempt::Failed: {
         Glib::ustring msg = !detail.empty() ? Glib::ustring(detail)
-                                            : _("GRBL handshake failed for an unknown reason.");
+                                            : _("GRBL 握手失败，原因未知。");
         sp_ui_error_dialog(msg.c_str());
         return;
     }
@@ -85,7 +85,7 @@ void axidraw_export_gcode_to_file(InkscapeApplication *app)
     auto *desktop = app->get_active_desktop();
     auto *win = app->get_active_window();
     if (!doc || !desktop || !win) {
-        sp_ui_error_dialog(_("No active document or window."));
+        sp_ui_error_dialog(_("当前没有活动文档或窗口。"));
         return;
     }
 
@@ -112,7 +112,7 @@ void axidraw_export_gcode_to_file(InkscapeApplication *app)
     gcf->add_suffix("txt");
     filters->append(gcf);
     auto all = Gtk::FileFilter::create();
-    all->set_name(_("All files"));
+    all->set_name(_("所有文件"));
     all->add_pattern("*");
     filters->append(all);
 
@@ -126,13 +126,13 @@ void axidraw_export_gcode_to_file(InkscapeApplication *app)
     }
 
     Glib::RefPtr<Gio::File> const dest =
-        choose_file_save(_("Export GRBL G-code"), win, filters, initial, folder);
+        choose_file_save(_("导出绘图机 G-code"), win, filters, initial, folder);
     if (!dest) {
         return;
     }
     std::string const path = dest->get_path();
     if (path.empty()) {
-        sp_ui_error_dialog(_("Could not determine a local file path to save."));
+        sp_ui_error_dialog(_("无法确定要保存到哪个本地文件路径。"));
         return;
     }
 
@@ -141,7 +141,7 @@ void axidraw_export_gcode_to_file(InkscapeApplication *app)
     Inkscape::Axidraw::GrblPlotStats stats{};
     if (!Inkscape::Axidraw::build_grbl_plot_gcode_string(doc, params, ctx, gcode, err, nullptr,
                                                          k_max_grbl_gcode_file_bytes, &stats)) {
-        sp_ui_error_dialog(err.empty() ? _("Could not build G-code from the document.") : err.c_str());
+        sp_ui_error_dialog(err.empty() ? _("无法从文档生成 G-code。") : err.c_str());
         return;
     }
     try {
@@ -153,17 +153,17 @@ void axidraw_export_gcode_to_file(InkscapeApplication *app)
     prefs->setString(k_pref_save_grbl_gcode_dir, folder);
 
     Glib::ustring const primary =
-        Glib::ustring::compose(_("GRBL G-code saved to:\n%1"), dest->get_parse_name());
+        Glib::ustring::compose(_("GRBL G-code 已保存到：\n%1"), dest->get_parse_name());
     Gtk::MessageDialog dlg(*win, primary, false, Gtk::MessageType::INFO, Gtk::ButtonsType::OK);
     Glib::ustring secondary;
     if (stats.has_bounds_mm) {
         std::ostringstream wxh;
-        wxh << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm) << " × "
+        wxh << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm) << " x "
              << (stats.max_y_mm - stats.min_y_mm);
-        secondary = Glib::ustring::compose(_("Strokes: %1. Approx. work area (machine mm, after preferences): %2."),
+        secondary = Glib::ustring::compose(_("笔画数：%1。估算加工范围（机器坐标 mm，已应用首选项）：%2。"),
                                            static_cast<guint64>(stats.stroke_count), Glib::ustring(wxh.str()));
     } else {
-        secondary = Glib::ustring::compose(_("Strokes: %1."), static_cast<guint64>(stats.stroke_count));
+        secondary = Glib::ustring::compose(_("笔画数：%1。"), static_cast<guint64>(stats.stroke_count));
     }
     if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
         double const total = stats.draw_length_mm + stats.travel_length_mm;
@@ -173,7 +173,7 @@ void axidraw_export_gcode_to_file(InkscapeApplication *app)
         std::ostringstream ratio;
         ratio << std::fixed << std::setprecision(1) << air;
         secondary += "\n";
-        secondary += Glib::ustring::compose(_("Draw/travel length: %1 mm. Air-run ratio: %2%%."),
+        secondary += Glib::ustring::compose(_("落笔/空程长度：%1 mm。空运行占比：%2%%。"),
                                             Glib::ustring(lengths.str()), Glib::ustring(ratio.str()));
     }
     dlg.set_secondary_text(secondary);
@@ -182,10 +182,10 @@ void axidraw_export_gcode_to_file(InkscapeApplication *app)
 
 std::vector<std::vector<Glib::ustring>> const raw_data_axidraw = {
     // clang-format off
-    {"app.axidraw-plot", N_("Send document to GRBL plotter…"), SECTION,
-     N_("Send visible vector paths from the document to a GRBL controller over serial (G21/G90, pen up/down, G0/G1).")},
-    {"app.axidraw-export-gcode", N_("Export GRBL G-code to file…"), SECTION,
-     N_("Build the same G-code as “Send document to GRBL plotter…” and save it to disk without opening the serial port.")},
+    {"app.axidraw-plot", N_("发送文档到绘图机…"), SECTION,
+     N_("将文档中的可见矢量路径通过串口发送到绘图机（G21/G90、抬笔/落笔、G0/G1）。")},
+    {"app.axidraw-export-gcode", N_("导出绘图机 G-code 到文件…"), SECTION,
+     N_("按与“发送文档到绘图机…”相同的规则生成 G-code，并在不打开串口的情况下保存到磁盘。")},
     // clang-format on
 };
 

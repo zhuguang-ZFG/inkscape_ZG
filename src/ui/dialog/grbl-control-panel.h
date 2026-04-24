@@ -20,6 +20,7 @@
 #include <gtkmm/label.h>
 #include <gtkmm/entry.h>
 #include <gtkmm/scrolledwindow.h>
+#include <gtkmm/spinbutton.h>
 #include <gtkmm/textview.h>
 #include <gtkmm/togglebutton.h>
 
@@ -58,7 +59,9 @@ private:
     double travel_feed_mm_min() const;
     void send_pen_state(bool up);
     void on_send_gcode();
+    void on_send_document_direct();
     void on_fill_gcode_from_document();
+    void on_read_firmware_settings();
     void on_load_gcode_from_file();
     void on_save_gcode_as();
     void on_cancel_gcode_stream();
@@ -74,6 +77,9 @@ private:
     void ensure_machine_status_poll(bool on);
     bool on_machine_status_poll_timeout();
     void post_machine_status(Glib::ustring const &text);
+    void load_mapping_preferences_to_ui();
+    void save_mapping_preferences_from_ui(bool refresh_preview = true);
+    void update_tool_change_mode_ui();
     bool link_is_open() const;
     bool link_write_bytes(void const *data, size_t len);
     bool link_read_line(std::string &out, int timeout_ms);
@@ -91,6 +97,7 @@ private:
     sigc::connection _machine_status_poll;
     bool _suspend_port_combo{false};
     bool _auto_probe_attempted{false};
+    bool _suspend_mapping_sync{false};
 
     Gtk::Frame _frame;
     Gtk::Box _vbox{Gtk::Orientation::VERTICAL};
@@ -103,6 +110,7 @@ private:
     Gtk::CheckButton _chk_send_from_cursor_line;
     Gtk::Label _machine_status;
     Gtk::ToggleButton _btn_connect;
+    Gtk::Button _btn_read_firmware;
     Gtk::ComboBoxText _radio_mode_combo;
     Gtk::Entry _radio_pwd;
     Gtk::CheckButton _chk_radio_restart;
@@ -124,15 +132,43 @@ private:
     Gtk::Button _btn_pen_down;
     Gtk::Button _btn_motors;
     Gtk::Button _btn_clear_alarm;
+    Gtk::CheckButton _chk_swap_xy;
+    Gtk::CheckButton _chk_invert_x;
+    Gtk::CheckButton _chk_invert_y;
+    Gtk::CheckButton _chk_flip_y;
+    Gtk::CheckButton _chk_align_origin;
+    Gtk::CheckButton _chk_clip_bed;
+    Gtk::CheckButton _chk_long_pen_up;
+    Gtk::CheckButton _chk_near_connect;
+    Gtk::CheckButton _chk_sparse_sampling;
+    Gtk::ComboBoxText _tool_change_mode_combo;
+    Gtk::CheckButton _chk_manual_pen_change_to_home;
+    Gtk::CheckButton _chk_manual_pen_change_prompt;
+    Gtk::CheckButton _chk_tool_change_point;
+    Gtk::SpinButton _bed_width_spin;
+    Gtk::SpinButton _bed_depth_spin;
+    Gtk::SpinButton _long_pen_up_spin;
+    Gtk::SpinButton _long_move_dist_spin;
+    Gtk::SpinButton _near_connect_dist_spin;
+    Gtk::SpinButton _sparse_keep_every_spin;
+    Gtk::SpinButton _tool_change_x_spin;
+    Gtk::SpinButton _tool_change_y_spin;
+    Gtk::TextView _firmware_info_view;
+    Gtk::ScrolledWindow _firmware_info_scroll;
 
     Gtk::Frame _gcode_frame;
     Gtk::Box _gcode_inner{Gtk::Orientation::VERTICAL};
     Gtk::Label _gcode_help;
+    Gtk::TextView _start_gcode_view;
+    Gtk::TextView _end_gcode_view;
+    Gtk::ScrolledWindow _start_gcode_scroll;
+    Gtk::ScrolledWindow _end_gcode_scroll;
     Gtk::ScrolledWindow _gcode_scroll;
     Gtk::TextView _gcode_view;
     Gtk::Box _gcode_actions{Gtk::Orientation::HORIZONTAL};
     Gtk::Button _btn_load_gcode;
     Gtk::Button _btn_fill_from_drawing;
+    Gtk::Button _btn_send_from_drawing;
     Gtk::Button _btn_save_gcode;
     Gtk::Button _btn_send_gcode;
     Gtk::Button _btn_cancel_gcode;

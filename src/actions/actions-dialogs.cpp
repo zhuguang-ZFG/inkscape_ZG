@@ -38,7 +38,7 @@ static const std::vector<std::vector<Glib::ustring>> raw_data_dialogs = {
     {"win.dialog-open('DocumentProperties')", N_("Open Document Properties"),  SECTION,  N_("Edit properties of this document (to be saved with the document)")                       },
     {"win.dialog-open('DocumentResources')",  N_("Open Document Resources"),   SECTION,  N_("Show document overview and resources") },
     {"win.dialog-open('ExtensionsGallery')",  N_("Open Extension Gallery"),    SECTION,  N_("Show and run available extensions") },
-    {"win.dialog-open('GrblControl')",        N_("Open GRBL control panel"),   SECTION,  N_("Jog axes, home, and control a serial GRBL device") },
+    {"win.dialog-open('GrblControl')",        N_("打开绘图机工作台"),            SECTION,  N_("连接绘图机、点动坐标轴、同步参数并发送绘图任务") },
     {"win.dialog-open('Export')",             N_("Open Export"),               SECTION,  N_("Export this document or a selection as a PNG image")                                     },
     {"win.dialog-open('FillStroke')",         N_("Open Fill and Stroke"),      SECTION,  N_("Edit objects' colors, gradients, arrowheads, and other fill and stroke properties...")   },
     {"win.dialog-open('FilterEffects')",      N_("Open Filter Effects"),       SECTION,  N_("Manage, edit, and apply SVG filters")                                                    },

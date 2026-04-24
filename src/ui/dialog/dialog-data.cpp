@@ -49,7 +49,7 @@ std::span<const DialogData> get_dialog_data_list() {
     {"FilterGallery",      _("Filter Gallery"),        INKSCAPE_ICON("color-filters"),               DialogData::EffectsActions, ScrollProvider::NOPROVIDE },
     {"FilterEffects",      _("Filter _Editor"),        INKSCAPE_ICON("dialog-filters"),              DialogData::EffectsActions, ScrollProvider::NOPROVIDE },
     {"ExtensionsGallery",  _("_Extension Gallery"),    INKSCAPE_ICON("dialog-extensions"),           DialogData::EffectsActions, ScrollProvider::NOPROVIDE },
-    {"GrblControl",        _("GRBL _control panel"),    INKSCAPE_ICON("dialog-extensions"),           DialogData::EffectsActions, ScrollProvider::NOPROVIDE },
+    {"GrblControl",        _("绘图机_工作台"),          INKSCAPE_ICON("dialog-extensions"),           DialogData::EffectsActions, ScrollProvider::NOPROVIDE },
     {"CloneTiler",         _("Tiled Clones"),          INKSCAPE_ICON("dialog-tile-clones"),          DialogData::EffectsActions, ScrollProvider::NOPROVIDE },
 
     // ASSETS ----------------------------------------

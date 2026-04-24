@@ -51,6 +51,16 @@ struct GrblExportParams {
     double feed_travel_mm_min = 6000.0;
     Glib::ustring pen_up_cmd = "G1 Z0 F3000";
     Glib::ustring pen_down_cmd = "G1 Z5 F3000";
+    /// Optional higher pen-up move used before long travel moves.
+    bool enable_long_pen_up = false;
+    double long_pen_up_mm = 10.0;
+    double long_move_distance_mm = 20.0;
+    /// Join consecutive strokes with a drawn bridge when the gap between them is very small.
+    bool enable_near_connect = false;
+    double near_connect_distance_mm = 0.3;
+    /// Keep one stroke out of each group of @a sparse_keep_every to thin dense hatch / line fields.
+    bool enable_sparse_stroke_sampling = false;
+    int sparse_keep_every = 1;
     /// Greedy nearest-neighbor ordering of whole polylines to shorten G0 travel (after collect, before send).
     bool optimize_stroke_order = true;
     /// When stroke-order optimization runs, allow reversing each polyline so travel starts from the closer endpoint.
@@ -63,6 +73,12 @@ struct GrblExportParams {
 
     /// After converting to millimetres: mirror Y using <tt>page_height_mm − y</tt> (SVG Y-down → common machine Y-up).
     bool flip_y_canvas = false;
+    /// Swap X/Y after document-to-machine conversion, useful when the machine axes are mounted rotated 90°.
+    bool swap_xy = false;
+    /// Invert the exported X coordinate after document-to-machine conversion.
+    bool invert_x = false;
+    /// Invert the exported Y coordinate after document-to-machine conversion.
+    bool invert_y = false;
     /// Subtract the minimum X/Y of all points so the lower-left of the plotted bounds becomes (0, 0) in machine mm.
     bool align_content_min_to_origin = false;
     /// Clip segments to the axis-aligned rectangle [0, machine_bed_width_mm] × [0, machine_bed_depth_mm].
@@ -77,8 +93,18 @@ struct GrblExportParams {
     bool manual_pen_change = false;
     bool pen_change_to_home = true;
     bool pen_change_prompt = true;
+    /// When a layer label contains `Tn`, emit `Tn M6` between layers if the tool changes.
+    bool enable_layer_tool_change_m6 = false;
+    /// Before `Tn M6`, optionally move to a dedicated pen-change point.
+    bool tool_change_use_point = false;
+    double tool_change_x_mm = 0.0;
+    double tool_change_y_mm = 0.0;
     /// If set (>0) and manual pen change is off, insert <tt>G4 P…</tt> dwell (seconds) between layers instead.
     double auto_layer_pause_dwell_sec = 0.0;
+    /// Optional custom commands inserted after G21/G90 and before the first stroke.
+    Glib::ustring start_gcode;
+    /// Optional custom commands inserted after the final pen-up move.
+    Glib::ustring end_gcode;
 };
 
 /**
