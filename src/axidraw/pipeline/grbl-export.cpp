@@ -1059,6 +1059,57 @@ static void prune_empty_layers(std::vector<std::vector<std::vector<Geom::Point>>
     }
 }
 
+static bool validate_layer_tool_ids_for_m6(PreparedPlotMm const &prep, std::string &err_out)
+{
+    if (!prep.layered || prep.layers_mm.empty()) {
+        return true;
+    }
+
+    std::vector<Glib::ustring> missing_layers;
+    missing_layers.reserve(prep.layers_mm.size());
+    for (std::size_t i = 0; i < prep.layers_mm.size(); ++i) {
+        bool const has_strokes = std::any_of(prep.layers_mm[i].begin(), prep.layers_mm[i].end(),
+                                             [](std::vector<Geom::Point> const &s) { return s.size() >= 2; });
+        if (!has_strokes) {
+            continue;
+        }
+
+        int const tool_id = i < prep.layer_tool_ids.size() ? prep.layer_tool_ids[i] : -1;
+        if (tool_id >= 0) {
+            continue;
+        }
+
+        if (i < prep.layer_labels.size() && !prep.layer_labels[i].empty()) {
+            missing_layers.push_back(prep.layer_labels[i]);
+        } else {
+            missing_layers.push_back(Glib::ustring::compose(_("图层 #%1"), static_cast<guint64>(i + 1)));
+        }
+    }
+
+    if (missing_layers.empty()) {
+        return true;
+    }
+
+    std::ostringstream labels;
+    std::size_t const preview_count = std::min<std::size_t>(missing_layers.size(), 6);
+    for (std::size_t i = 0; i < preview_count; ++i) {
+        if (i > 0) {
+            labels << "，";
+        }
+        labels << missing_layers[i];
+    }
+    if (missing_layers.size() > preview_count) {
+        labels << " ...";
+    }
+
+    err_out = Glib::ustring::compose(
+                  _("当前选择了“按图层工具号换笔(M6)”，但以下非空图层缺少 Tn 工具号：%1。"
+                    "为避免用错笔，已停止生成/发送。请给每个要绘制的图层补上 T1/T2/T3，或改用“手动换笔”模式。"),
+                  Glib::ustring(labels.str()))
+                  .raw();
+    return false;
+}
+
 static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &params, GrblExportContext const &ctx,
                                   PreparedPlotMm &prep, std::string &err_out)
 {
@@ -1134,6 +1185,9 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
             prune_empty_layers(prep.layers_mm, &prep.layer_tool_ids, &prep.layer_labels);
             if (prep.layers_mm.empty()) {
                 err_out = _("Nothing remains to plot after coordinate mapping or machine-bed clipping.");
+                return false;
+            }
+            if (params.enable_layer_tool_change_m6 && !validate_layer_tool_ids_for_m6(prep, err_out)) {
                 return false;
             }
             if (prep.layers_mm.size() <= 1) {

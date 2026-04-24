@@ -58,14 +58,12 @@ void axidraw_plot(InkscapeApplication *app)
     case Inkscape::Axidraw::GrblConnectAttempt::Cancelled:
         return;
     case Inkscape::Axidraw::GrblConnectAttempt::Failed: {
-        Glib::ustring msg = !detail.empty() ? Glib::ustring(detail)
-                                            : _("GRBL 握手失败，原因未知。");
+        Glib::ustring msg = !detail.empty() ? Glib::ustring(detail) : _("GRBL 连接失败，原因未知。");
         sp_ui_error_dialog(msg.c_str());
         return;
     }
     case Inkscape::Axidraw::GrblConnectAttempt::Ok: {
-        Gtk::MessageDialog dlg(*win, Glib::ustring(detail), false, Gtk::MessageType::INFO,
-                               Gtk::ButtonsType::OK);
+        Gtk::MessageDialog dlg(*win, Glib::ustring(detail), false, Gtk::MessageType::INFO, Gtk::ButtonsType::OK);
         Inkscape::UI::dialog_run(dlg);
         return;
     }
@@ -125,8 +123,7 @@ void axidraw_export_gcode_to_file(InkscapeApplication *app)
         }
     }
 
-    Glib::RefPtr<Gio::File> const dest =
-        choose_file_save(_("导出绘图机 G-code"), win, filters, initial, folder);
+    Glib::RefPtr<Gio::File> const dest = choose_file_save(_("导出绘图机 G-code"), win, filters, initial, folder);
     if (!dest) {
         return;
     }
@@ -159,7 +156,7 @@ void axidraw_export_gcode_to_file(InkscapeApplication *app)
     if (stats.has_bounds_mm) {
         std::ostringstream wxh;
         wxh << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm) << " x "
-             << (stats.max_y_mm - stats.min_y_mm);
+            << (stats.max_y_mm - stats.min_y_mm);
         secondary = Glib::ustring::compose(_("笔画数：%1。估算加工范围（机器坐标 mm，已应用首选项）：%2。"),
                                            static_cast<guint64>(stats.stroke_count), Glib::ustring(wxh.str()));
     } else {

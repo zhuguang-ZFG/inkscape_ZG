@@ -31,6 +31,7 @@
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
 #include <gtkmm/filefilter.h>
+#include <gtkmm/messagedialog.h>
 #include <gtkmm/textbuffer.h>
 #include <gtkmm/window.h>
 #include <glibmm/i18n.h>
@@ -52,6 +53,7 @@
 #include "style-enums.h"
 #include "ui/dialog/choose-file-utils.h"
 #include "ui/dialog/choose-file.h"
+#include "ui/dialog-run.h"
 #include "ui/pack.h"
 #include "util/scope_exit.h"
 
@@ -62,6 +64,7 @@ using Inkscape::Axidraw::build_grbl_plot_gcode_string;
 using Inkscape::Axidraw::build_grbl_plot_machine_preview_pathvector_in_doc_space;
 using Inkscape::Axidraw::build_grbl_plot_preview_pathvector;
 using Inkscape::Axidraw::GrblPlotStats;
+using Inkscape::Axidraw::export_paths_to_grbl;
 using Inkscape::Axidraw::grbl_export_params_from_preferences;
 using Inkscape::Axidraw::grbl_send_line;
 using Inkscape::Axidraw::SerialPort;
@@ -1479,34 +1482,152 @@ void GrblControlPanel::on_send_document_direct()
     Inkscape::Axidraw::GrblExportParams params;
     grbl_export_params_from_preferences(prefs, params);
 
-    Inkscape::Axidraw::GrblExportContext ctx;
-    ctx.desktop = desktop;
-    ctx.selection = getSelection();
-    ctx.use_current_layer_without_selection = prefs->getBool(k_pref_limit_layer, false);
-    ctx.cancel = nullptr;
-
-    std::string out;
-    std::string err;
-    std::size_t strokes = 0;
-    GrblPlotStats stats{};
-    if (!build_grbl_plot_gcode_string(doc, params, ctx, out, err, &strokes, k_max_gcode_editor_bytes, &stats)) {
-        clear_plot_preview_overlay();
-        post_status(err.empty() ? Glib::ustring(_("无法从当前文档生成 G-code。")) : Glib::ustring(err), true);
+    if (!_port || !_port->is_open()) {
+        if (_tcp_port && _tcp_port->is_open()) {
+            post_status(_("“从图稿直接发送”目前仅支持串口直连的流式发送。网络连接请先“从图稿填充”，再发送编辑器中的 G-code。"),
+                        true);
+        } else {
+            post_status(_("尚未连接串口绘图机。"), true);
+        }
         return;
     }
 
-    if (auto const buf = _gcode_view.get_buffer()) {
-        buf->set_text(out);
-    }
+    bool const use_current_layer_without_selection = prefs->getBool(k_pref_limit_layer, false);
+    auto *selection = getSelection();
     if (_chk_canvas_plot_preview.get_active() || _chk_machine_space_preview.get_active()) {
         sync_plot_preview_overlay();
     }
 
-    post_status(
-        Glib::ustring::compose(_("已从图稿生成 %1 条笔画的 G-code，准备直接发送到机器。"),
-                               static_cast<guint64>(strokes)),
-        false);
-    on_send_gcode();
+    _gcode_sending = true;
+    _gcode_cancel = false;
+    set_controls_sensitive_for_gcode_stream(false);
+    post_status(_("正在按当前图稿直接流式发送到绘图机..."), false);
+
+    auto *win = dynamic_cast<Gtk::Window *>(get_root());
+    if (params.manual_pen_change && params.pen_change_prompt && !win) {
+        post_status(_("当前无法弹出手动换笔确认窗口，请先使用有父窗口的绘图机工作台发送。"), true);
+        finish_gcode_stream_ui();
+        return;
+    }
+
+    std::thread([this, doc, desktop, selection, use_current_layer_without_selection, params, win]() mutable {
+        std::lock_guard const guard(_port_mutex);
+        auto const finish = [this] { finish_gcode_stream_ui(); };
+
+        if (!_port || !_port->is_open()) {
+            post_status(_("串口已断开。"), true);
+            finish();
+            return;
+        }
+
+        Inkscape::Axidraw::GrblExportContext ctx;
+        ctx.desktop = desktop;
+        ctx.selection = selection;
+        ctx.use_current_layer_without_selection = use_current_layer_without_selection;
+        ctx.cancel = &_gcode_cancel;
+
+        auto pump = [] {
+            if (auto const ctx = Glib::MainContext::get_default()) {
+                while (ctx->iteration(false)) {
+                }
+            }
+        };
+
+        if (params.manual_pen_change && params.pen_change_prompt && win) {
+            ctx.on_manual_pen_change_between_layers = [win](double, double) -> bool {
+                Gtk::MessageDialog dlg(
+                    *win,
+                    _("下一层即将开始绘制。\n如果你按图层分笔/分颜色，请现在手动换笔，然后点击“是”继续。"),
+                    true, Gtk::MessageType::QUESTION, Gtk::ButtonsType::YES_NO, true);
+                dlg.set_secondary_text(
+                    _("流程与 AxiDraw 手动换笔一致：先抬笔，可选回到原点，确认后再回到断点继续绘制。"));
+                return Inkscape::UI::dialog_run(dlg) == Gtk::ResponseType::YES;
+            };
+        }
+
+        struct StreamProgress {
+            std::size_t stroke_done = 0;
+            std::size_t stroke_total = 0;
+            std::size_t lines_sent = 0;
+            std::size_t lines_est = 0;
+        };
+        auto const progress = std::make_shared<StreamProgress>();
+        using clock = std::chrono::steady_clock;
+        auto const last_paint = std::make_shared<clock::time_point>(clock::time_point::min());
+        auto const refresh_status = [this, progress, last_paint]() {
+            if (progress->lines_est == 0 && progress->stroke_total == 0) {
+                return;
+            }
+            auto const now = clock::now();
+            constexpr auto k_min_interval = std::chrono::milliseconds(100);
+            bool const at_end = (progress->lines_est > 0 && progress->lines_sent >= progress->lines_est) ||
+                                (progress->stroke_total > 0 && progress->stroke_done >= progress->stroke_total);
+            if (!at_end && now - *last_paint < k_min_interval) {
+                return;
+            }
+            *last_paint = now;
+
+            if (progress->lines_est > 0 && progress->lines_sent > 0 && progress->stroke_total > 0 &&
+                progress->stroke_done > 0) {
+                post_status(Glib::ustring::compose(_("正在发送：第 %1 / %2 条笔画，第 %3 / ~%4 行..."),
+                                                   static_cast<guint64>(progress->stroke_done),
+                                                   static_cast<guint64>(progress->stroke_total),
+                                                   static_cast<guint64>(progress->lines_sent),
+                                                   static_cast<guint64>(progress->lines_est)),
+                            false);
+            } else if (progress->lines_est > 0 && progress->lines_sent > 0) {
+                post_status(Glib::ustring::compose(_("正在发送：第 %1 / ~%2 行..."),
+                                                   static_cast<guint64>(progress->lines_sent),
+                                                   static_cast<guint64>(progress->lines_est)),
+                            false);
+            } else if (progress->stroke_total > 0 && progress->stroke_done > 0) {
+                post_status(Glib::ustring::compose(_("正在发送：第 %1 / %2 条笔画..."),
+                                                   static_cast<guint64>(progress->stroke_done),
+                                                   static_cast<guint64>(progress->stroke_total)),
+                            false);
+            }
+        };
+        ctx.on_plot_stroke_progress = [progress, refresh_status](std::size_t done, std::size_t total) {
+            progress->stroke_done = done;
+            progress->stroke_total = total;
+            refresh_status();
+        };
+        ctx.on_plot_gcode_line_progress = [progress, refresh_status](std::size_t sent, std::size_t est) {
+            progress->lines_sent = sent;
+            progress->lines_est = est;
+            refresh_status();
+        };
+
+        grbl_begin_plot_waits(pump, &_gcode_cancel);
+        scope_exit const end_plot{[] { grbl_end_plot_waits(); }};
+
+        std::string err;
+        std::size_t strokes = 0;
+        GrblPlotStats stats{};
+        if (!export_paths_to_grbl(*_port, doc, params, ctx, err, &strokes, &stats)) {
+            if (err == grbl_error_user_cancelled()) {
+                post_status(_("发送已停止（已取消）。"), false);
+            } else {
+                post_status(Glib::ustring(Inkscape::Axidraw::grbl_error_to_user_message(err)), true);
+            }
+            finish();
+            return;
+        }
+
+        if (stats.has_length_stats && (stats.draw_length_mm + stats.travel_length_mm) > 1e-9) {
+            double const total = stats.draw_length_mm + stats.travel_length_mm;
+            double const air = (stats.travel_length_mm / total) * 100.0;
+            std::ostringstream ratio;
+            ratio << std::fixed << std::setprecision(1) << air;
+            post_status(Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画，空走占比约 %2%%。"),
+                                               static_cast<guint64>(strokes), Glib::ustring(ratio.str())),
+                        false);
+        } else {
+            post_status(Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画。"), static_cast<guint64>(strokes)),
+                        false);
+        }
+        finish();
+    }).detach();
 }
 
 void GrblControlPanel::on_load_gcode_from_file()
