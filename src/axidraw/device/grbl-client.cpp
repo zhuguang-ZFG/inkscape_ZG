@@ -21,8 +21,12 @@ namespace Inkscape::Axidraw {
 namespace {
 char const g_user_cancel_err[] = "INKSCAPE_GRBL_USER_CANCEL";
 
-static std::function<void()> s_pump;
-static std::atomic<bool> const *s_cancel = nullptr;
+struct GrblWaitContext {
+    std::function<void()> pump;
+    std::atomic<bool> const *cancel = nullptr;
+};
+
+thread_local GrblWaitContext s_wait_context;
 
 bool starts_with_ascii_case_insensitive(std::string_view haystack, std::string_view needle)
 {
@@ -46,14 +50,14 @@ bool starts_with_ascii_case_insensitive(std::string_view haystack, std::string_v
 
 void grbl_begin_plot_waits(std::function<void()> pump, std::atomic<bool> const *cancel_flag)
 {
-    s_pump = std::move(pump);
-    s_cancel = cancel_flag;
+    s_wait_context.pump = std::move(pump);
+    s_wait_context.cancel = cancel_flag;
 }
 
 void grbl_end_plot_waits()
 {
-    s_pump = {};
-    s_cancel = nullptr;
+    s_wait_context.pump = {};
+    s_wait_context.cancel = nullptr;
 }
 
 char const *grbl_error_user_cancelled() noexcept
@@ -95,16 +99,39 @@ bool grbl_is_error_line(std::string_view line)
     return starts_with_ascii_case_insensitive(line, "error:");
 }
 
+bool grbl_is_probe_response_line(std::string_view line)
+{
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
+        line.remove_prefix(1);
+    }
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) {
+        line.remove_suffix(1);
+    }
+    if (line.empty() || grbl_is_error_line(line)) {
+        return false;
+    }
+    if (line.front() == '<') {
+        return true;
+    }
+    if (starts_with_ascii_case_insensitive(line, "ok")) {
+        return true;
+    }
+    if (starts_with_ascii_case_insensitive(line, "grbl")) {
+        return true;
+    }
+    return false;
+}
+
 static void grbl_progress_tick()
 {
-    if (s_pump) {
-        s_pump();
+    if (s_wait_context.pump) {
+        s_wait_context.pump();
     }
 }
 
 static bool grbl_cancelled(std::string &err_out)
 {
-    if (s_cancel && s_cancel->load(std::memory_order_relaxed)) {
+    if (s_wait_context.cancel && s_wait_context.cancel->load(std::memory_order_relaxed)) {
         err_out = g_user_cancel_err;
         return true;
     }
@@ -186,11 +213,7 @@ static GrblProbeResult probe_open_grbl_impl(PortT &port)
         r.ok = false;
         return r;
     }
-    if (r.response_line.find('<') != std::string::npos || r.response_line.find("ok") != std::string::npos) {
-        r.ok = true;
-        return r;
-    }
-    r.ok = !r.response_line.empty();
+    r.ok = grbl_is_probe_response_line(r.response_line);
     return r;
 }
 

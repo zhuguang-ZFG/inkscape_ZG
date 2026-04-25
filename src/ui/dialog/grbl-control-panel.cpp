@@ -773,7 +773,7 @@ bool parse_double_c(std::string const &text, double &value_out)
     while (*end == ' ' || *end == '\t') {
         ++end;
     }
-    if (*end != '\0') {
+    if (*end != '\0' || !std::isfinite(value)) {
         return false;
     }
     value_out = value;
@@ -818,13 +818,29 @@ bool parse_tcp_device_spec(std::string const &spec, std::string &host_out, int &
     if (s.rfind("tcp://", 0) == 0) {
         s.erase(0, 6);
     }
-    auto const colon = s.rfind(':');
-    if (colon == std::string::npos || colon == 0 || colon + 1 >= s.size()) {
-        return false;
+
+    std::string port_text;
+    if (!s.empty() && s.front() == '[') {
+        auto const closing = s.find(']');
+        if (closing == std::string::npos || closing <= 1 || closing + 2 >= s.size() || s[closing + 1] != ':') {
+            return false;
+        }
+        host_out = s.substr(1, closing - 1);
+        port_text = s.substr(closing + 2);
+    } else {
+        auto const colon = s.rfind(':');
+        if (colon == std::string::npos || colon == 0 || colon + 1 >= s.size()) {
+            return false;
+        }
+        if (s.find(':') != colon) {
+            return false;
+        }
+        host_out = s.substr(0, colon);
+        port_text = s.substr(colon + 1);
     }
-    host_out = s.substr(0, colon);
+
     try {
-        int const p = std::stoi(s.substr(colon + 1));
+        int const p = std::stoi(port_text);
         if (p <= 0 || p > 65535) {
             return false;
         }
@@ -1333,6 +1349,38 @@ bool GrblControlPanel::with_locked_open_link(std::atomic<bool> const &stop, std:
 
     work();
     return !stop.load(std::memory_order_acquire);
+}
+
+Inkscape::Axidraw::GrblLink *GrblControlPanel::grbl_link() const noexcept
+{
+    return _link.get();
+}
+
+std::atomic<bool> const *GrblControlPanel::gcode_cancel_flag() const noexcept
+{
+    return &_gcode_cancel;
+}
+
+bool GrblControlPanel::is_connect_active() const
+{
+    return _btn_connect.get_active();
+}
+
+void GrblControlPanel::set_firmware_info_text(Glib::ustring const &text)
+{
+    if (auto const buf = _firmware_info_view.get_buffer()) {
+        buf->set_text(text);
+    }
+}
+
+void GrblControlPanel::set_mapping_sync_suspended(bool const suspended) noexcept
+{
+    _suspend_mapping_sync = suspended;
+}
+
+bool GrblControlPanel::should_sync_page_to_bed_on_firmware_read() const
+{
+    return _chk_sync_page_to_bed.get_active();
 }
 
 void GrblControlPanel::post_machine_status(Glib::ustring const &text)

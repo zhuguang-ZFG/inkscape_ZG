@@ -118,7 +118,7 @@ void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const
     scope_exit const finish_sync{[&panel] {
         Glib::signal_idle().connect_once(sigc::track_object([&panel] {
             panel.set_firmware_syncing_state(false);
-            if (panel._btn_connect.get_active()) {
+            if (panel.is_connect_active()) {
                 panel.ensure_machine_status_poll(true);
             }
             panel.schedule_plot_feedback_refresh(false);
@@ -132,18 +132,19 @@ void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const
     auto query_lines_locked = [&panel, &stop](std::string const &command, std::vector<std::string> &lines_out,
                                               std::string &err_out) -> bool {
         lines_out.clear();
-        if (stop.load(std::memory_order_acquire) || !(panel._link && panel._link->is_open())) {
+        auto *link = panel.grbl_link();
+        if (stop.load(std::memory_order_acquire) || !(link && link->is_open())) {
             err_out = "not connected";
             return false;
         }
 
-        panel._link->purge_io();
+        link->purge_io();
         if (stop.load(std::memory_order_acquire)) {
             err_out = "cancelled";
             return false;
         }
 
-        bool const sent = panel._link && panel._link->write_line(command);
+        bool const sent = link->write_line(command);
         if (!sent) {
             err_out = "serial write failed";
             return false;
@@ -155,7 +156,7 @@ void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const
                 return false;
             }
             std::string line;
-            if (!panel._link->read_line(line, 1800)) {
+            if (!link->read_line(line, 1800)) {
                 err_out = "timeout waiting for controller response";
                 return false;
             }
@@ -236,7 +237,7 @@ void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const
         auto apply_snapshot_to_ui = [&panel](GrblFirmwareSnapshot const &snapshot_in, bool &page_synced_out,
                                              bool &unit_synced_out) {
             bool changed_local = false;
-            panel._suspend_mapping_sync = true;
+            panel.set_mapping_sync_suspended(true);
             if (snapshot_in.has_direction_mask) {
                 changed_local = update_check_if_needed(panel._chk_invert_x, (snapshot_in.direction_mask & 0x1) != 0) || changed_local;
                 changed_local = update_check_if_needed(panel._chk_invert_y, (snapshot_in.direction_mask & 0x2) != 0) || changed_local;
@@ -247,11 +248,11 @@ void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const
             if (snapshot_in.has_y_travel) {
                 changed_local = update_spin_if_needed(panel._bed_depth_spin, snapshot_in.y_travel_mm) || changed_local;
             }
-            panel._suspend_mapping_sync = false;
+            panel.set_mapping_sync_suspended(false);
 
             page_synced_out = false;
             unit_synced_out = false;
-            if (panel._chk_sync_page_to_bed.get_active() && snapshot_in.has_x_travel && snapshot_in.has_y_travel) {
+            if (panel.should_sync_page_to_bed_on_firmware_read() && snapshot_in.has_x_travel && snapshot_in.has_y_travel) {
                 if (auto *doc = panel.getDocument()) {
                     page_synced_out = panel.sync_document_page_to_bed_mm(doc, snapshot_in.x_travel_mm,
                                                                          snapshot_in.y_travel_mm, unit_synced_out);
@@ -299,9 +300,7 @@ void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const
             return Glib::ustring(msg.str());
         };
 
-        if (auto const buf = panel._firmware_info_view.get_buffer()) {
-            buf->set_text(snapshot.display_text);
-        }
+        panel.set_firmware_info_text(snapshot.display_text);
 
         bool page_synced = false;
         bool unit_synced = false;

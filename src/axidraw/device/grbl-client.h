@@ -30,6 +30,8 @@ char const *grbl_error_user_cancelled() noexcept;
 std::string grbl_error_to_user_message(std::string const &err);
 /** True when a controller reply line is an error (case-insensitive). */
 bool grbl_is_error_line(std::string_view line);
+/** True when a probe response line is specific enough to treat as GRBL. */
+bool grbl_is_probe_response_line(std::string_view line);
 
 struct GrblProbeResult {
     bool ok{};

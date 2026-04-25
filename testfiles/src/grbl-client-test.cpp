@@ -18,6 +18,18 @@ TEST(GrblClientTest, ErrorLineDetectionIsCaseInsensitive)
     EXPECT_FALSE(Inkscape::Axidraw::grbl_is_error_line("[MSG:Last error cleared]"));
 }
 
+TEST(GrblClientTest, ProbeResponseDetectionIsStrictEnough)
+{
+    EXPECT_TRUE(Inkscape::Axidraw::grbl_is_probe_response_line("<Idle|MPos:0,0,0|FS:0,0>"));
+    EXPECT_TRUE(Inkscape::Axidraw::grbl_is_probe_response_line("ok"));
+    EXPECT_TRUE(Inkscape::Axidraw::grbl_is_probe_response_line("Grbl 1.1h ['$' for help]"));
+
+    EXPECT_FALSE(Inkscape::Axidraw::grbl_is_probe_response_line(""));
+    EXPECT_FALSE(Inkscape::Axidraw::grbl_is_probe_response_line("HELLO"));
+    EXPECT_FALSE(Inkscape::Axidraw::grbl_is_probe_response_line("[MSG:Last error cleared]"));
+    EXPECT_FALSE(Inkscape::Axidraw::grbl_is_probe_response_line("error:1"));
+}
+
 TEST(GrblClientTest, SendLinesStopsAtFirstFailure)
 {
     std::vector<std::string> sent;

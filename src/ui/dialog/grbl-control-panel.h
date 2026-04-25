@@ -121,6 +121,12 @@ private:
                          Glib::ustring &reason) const;
     bool is_machine_command_blocked(Glib::ustring &reason) const;
     bool is_export_operation_blocked(Glib::ustring &reason) const;
+    Inkscape::Axidraw::GrblLink *grbl_link() const noexcept;
+    std::atomic<bool> const *gcode_cancel_flag() const noexcept;
+    bool is_connect_active() const;
+    void set_firmware_info_text(Glib::ustring const &text);
+    void set_mapping_sync_suspended(bool suspended) noexcept;
+    bool should_sync_page_to_bed_on_firmware_read() const;
 
     void refresh_port_list();
     void on_port_combo_changed();
