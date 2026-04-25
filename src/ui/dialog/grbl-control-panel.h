@@ -69,6 +69,10 @@ private:
     void selectionModified(Inkscape::Selection *selection, guint flags) override;
     void connect_toggle();
     void post_status(Glib::ustring const &text, bool is_error = false);
+    bool start_short_worker(std::function<void(std::atomic<bool> const &)> work,
+                            Glib::ustring const &shutdown_message = {});
+    bool with_locked_open_link(std::atomic<bool> const &stop, std::function<void()> work,
+                               bool check_machine_blocked = false, bool serial_required = false);
     void run_action(std::function<void(std::string &)> work, bool report_ok = true);
     void soft_reset();
     void jog_x(double sign);
@@ -165,6 +169,9 @@ private:
     void refresh_plot_feedback(bool refresh_preview = true);
     bool begin_gcode_stream_ui(Glib::ustring const &status);
     void post_gcode_stream_result(std::string const &err);
+    void join_gcode_stream_thread();
+    void start_gcode_stream_thread(std::function<void()> work);
+    void finish_gcode_stream_worker(std::unique_lock<std::mutex> &port_lock);
     std::unique_ptr<GrblPanelWorkers> _workers;
     std::unique_ptr<Inkscape::Axidraw::GrblLink> _link;
     std::mutex _gcode_stream_thread_mutex;

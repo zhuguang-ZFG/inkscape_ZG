@@ -88,6 +88,10 @@ using Inkscape::choose_file_save;
 
 namespace {
 
+constexpr double k_mm_per_in = 25.4;
+constexpr double k_px_per_in = 96.0;
+constexpr double k_mm_per_px = k_mm_per_in / k_px_per_in;
+
 void append_axis_arrow(Geom::PathVector &paths, Geom::Point const &from, Geom::Point const &to, double head_len, double head_width)
 {
     Geom::Path shaft(from);
@@ -342,14 +346,22 @@ bool get_bed_size_in_document_units(SPDocument *doc, double bed_width_mm, double
     if (!doc) {
         return false;
     }
-    auto const &unit_table = Inkscape::Util::UnitTable::get();
-    auto *doc_unit = doc->getDisplayUnit();
-    if (!doc_unit) {
-        doc_unit = unit_table.getUnit("px");
+
+    auto const viewbox = doc->getViewBox();
+    auto const page_px = doc->getDimensions();
+    double const page_w_mm = page_px[Geom::X] * k_mm_per_px;
+    double const page_h_mm = page_px[Geom::Y] * k_mm_per_px;
+
+    if (viewbox.width() > 1e-9 && viewbox.height() > 1e-9 &&
+        page_w_mm > 1e-9 && page_h_mm > 1e-9) {
+        // Keep UI-side bed conversion aligned with the export mapper's doc<->mm basis.
+        bed_w_doc = bed_width_mm * (viewbox.width() / page_w_mm);
+        bed_h_doc = bed_height_mm * (viewbox.height() / page_h_mm);
+    } else {
+        // Fallback to SVG px user units if viewBox/page dimensions are not usable.
+        bed_w_doc = bed_width_mm / k_mm_per_px;
+        bed_h_doc = bed_height_mm / k_mm_per_px;
     }
-    auto *mm = unit_table.getUnit("mm");
-    bed_w_doc = Inkscape::Util::Quantity::convert(bed_width_mm, mm, doc_unit);
-    bed_h_doc = Inkscape::Util::Quantity::convert(bed_height_mm, mm, doc_unit);
     return bed_w_doc > 1e-9 && bed_h_doc > 1e-9;
 }
 
@@ -405,18 +417,17 @@ bool get_layout_scale_metrics(SPDocument *doc, double bed_width_mm, double bed_h
         return false;
     }
 
-    auto const &unit_table = Inkscape::Util::UnitTable::get();
-    auto *doc_unit = doc->getDisplayUnit();
-    if (!doc_unit) {
-        doc_unit = unit_table.getUnit("px");
-    }
-    auto *mm = unit_table.getUnit("mm");
-
     metrics.content_w_doc = bounds.width();
     metrics.content_h_doc = bounds.height();
-    return get_layout_scale_metrics_from_bounds_mm(Inkscape::Util::Quantity::convert(metrics.content_w_doc, doc_unit, mm),
-                                                   Inkscape::Util::Quantity::convert(metrics.content_h_doc, doc_unit, mm),
-                                                   bed_width_mm, bed_height_mm, metrics, error);
+    if (!(bed_w_doc > 1e-9) || !(bed_h_doc > 1e-9)) {
+        error = _("机器行程无效，请先同步或设置床面宽度/深度。");
+        return false;
+    }
+
+    // Use the same ratio basis as get_bed_size_in_document_units/export mapper to avoid unit-source skew.
+    double const content_w_mm = metrics.content_w_doc * (bed_width_mm / bed_w_doc);
+    double const content_h_mm = metrics.content_h_doc * (bed_height_mm / bed_h_doc);
+    return get_layout_scale_metrics_from_bounds_mm(content_w_mm, content_h_mm, bed_width_mm, bed_height_mm, metrics, error);
 }
 
 void setup_summary_label(Gtk::Label &label, Glib::ustring const &initial_markup, int margin_top, int margin_bottom)
@@ -941,12 +952,7 @@ GrblControlPanel::~GrblControlPanel()
 {
     ensure_machine_status_poll(false);
     _gcode_cancel.store(true, std::memory_order_release);
-    {
-        std::lock_guard const lk_gcode(_gcode_stream_thread_mutex);
-        if (_gcode_stream_thread.joinable()) {
-            _gcode_stream_thread.join();
-        }
-    }
+    join_gcode_stream_thread();
     if (_workers) {
         _workers->request_stop();
     }
@@ -1313,6 +1319,48 @@ void GrblControlPanel::post_status(Glib::ustring const &text, bool const is_erro
             _status.set_text(text);
         }
     }, *this));
+}
+
+bool GrblControlPanel::start_short_worker(std::function<void(std::atomic<bool> const &)> work,
+                                          Glib::ustring const &shutdown_message)
+{
+    if (_workers && _workers->start(std::move(work))) {
+        return true;
+    }
+    if (!shutdown_message.empty()) {
+        post_status(shutdown_message, true);
+    }
+    return false;
+}
+
+bool GrblControlPanel::with_locked_open_link(std::atomic<bool> const &stop, std::function<void()> work,
+                                             bool const check_machine_blocked, bool const serial_required)
+{
+    if (stop.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    Glib::ustring blocked_reason;
+    if (check_machine_blocked && is_machine_command_blocked(blocked_reason)) {
+        post_status(blocked_reason, true);
+        return false;
+    }
+
+    std::lock_guard const guard(_port_mutex);
+    if (stop.load(std::memory_order_acquire)) {
+        return false;
+    }
+    if (check_machine_blocked && is_machine_command_blocked(blocked_reason)) {
+        post_status(blocked_reason, true);
+        return false;
+    }
+    if (!(_link && _link->is_open())) {
+        post_not_connected_status(serial_required);
+        return false;
+    }
+
+    work();
+    return !stop.load(std::memory_order_acquire);
 }
 
 void GrblControlPanel::post_machine_status(Glib::ustring const &text)
@@ -1726,6 +1774,33 @@ void GrblControlPanel::post_gcode_stream_result(std::string const &err)
     }
 }
 
+void GrblControlPanel::join_gcode_stream_thread()
+{
+    std::lock_guard const lk(_gcode_stream_thread_mutex);
+    if (_gcode_stream_thread.joinable()) {
+        _gcode_stream_thread.join();
+    }
+}
+
+void GrblControlPanel::start_gcode_stream_thread(std::function<void()> work)
+{
+    std::lock_guard const lk(_gcode_stream_thread_mutex);
+    if (_gcode_stream_thread.joinable()) {
+        _gcode_stream_thread.join();
+    }
+    _gcode_stream_thread = std::thread([work = std::move(work)]() mutable {
+        work();
+    });
+}
+
+void GrblControlPanel::finish_gcode_stream_worker(std::unique_lock<std::mutex> &port_lock)
+{
+    if (port_lock.owns_lock()) {
+        port_lock.unlock();
+    }
+    finish_gcode_stream_from_worker();
+}
+
 void GrblControlPanel::ensure_machine_status_poll(bool const on)
 {
     _machine_status_poll.disconnect();
@@ -1756,7 +1831,7 @@ bool GrblControlPanel::on_machine_status_poll_timeout()
         return true;
     }
 
-    if (!_workers || !_workers->start([this](GrblPanelWorkers::StopFlag const &stop) {
+    if (!start_short_worker([this](GrblPanelWorkers::StopFlag const &stop) {
             scope_exit const clear_in_flight{[this] {
                 _machine_status_poll_in_flight.store(false, std::memory_order_release);
             }};
@@ -1850,30 +1925,9 @@ void GrblControlPanel::on_port_combo_changed()
 
 void GrblControlPanel::run_action(std::function<void(std::string &)> work, bool const report_ok)
 {
-    if (!_workers || !_workers->start([this, w = std::move(work), report_ok](GrblPanelWorkers::StopFlag const &stop) mutable {
-            if (stop.load(std::memory_order_acquire)) {
-                return;
-            }
-            Glib::ustring blocked_reason;
-            if (is_machine_command_blocked(blocked_reason)) {
-                post_status(blocked_reason, true);
-                return;
-            }
-            std::lock_guard const guard(_port_mutex);
-            if (stop.load(std::memory_order_acquire)) {
-                return;
-            }
-            if (is_machine_command_blocked(blocked_reason)) {
-                post_status(blocked_reason, true);
-                return;
-            }
-            if (!(_link && _link->is_open())) {
-                post_not_connected_status();
-                return;
-            }
+    if (!start_short_worker([this, w = std::move(work), report_ok](GrblPanelWorkers::StopFlag const &stop) mutable {
             std::string err;
-            w(err);
-            if (stop.load(std::memory_order_acquire)) {
+            if (!with_locked_open_link(stop, [&] { w(err); }, true)) {
                 return;
             }
             if (err.empty()) {
@@ -1883,8 +1937,7 @@ void GrblControlPanel::run_action(std::function<void(std::string &)> work, bool 
             } else {
                 post_status(Glib::ustring(Inkscape::Axidraw::grbl_error_to_user_message(err)), true);
             }
-        })) {
-        post_status(_("当前面板正在关闭，无法启动新的控制器命令。"), true);
+        }, _("当前面板正在关闭，无法启动新的控制器命令。"))) {
     }
 }
 
@@ -1893,7 +1946,7 @@ void GrblControlPanel::on_read_firmware_settings()
     if (!begin_firmware_sync()) {
         return;
     }
-    if (!_workers || !_workers->start([this](GrblPanelWorkers::StopFlag const &stop) {
+    if (!start_short_worker([this](GrblPanelWorkers::StopFlag const &stop) {
         scope_exit const finish_sync{[this] {
             Glib::signal_idle().connect_once(sigc::track_object([this] {
                 set_firmware_syncing_state(false);
@@ -1961,13 +2014,7 @@ void GrblControlPanel::on_read_firmware_settings()
         std::vector<std::string> errors;
         GrblFirmwareSnapshot snapshot;
 
-        {
-            std::lock_guard const guard(_port_mutex);
-            if (!(_link && _link->is_open())) {
-                post_not_connected_status();
-                return;
-            }
-
+        if (!with_locked_open_link(stop, [&] {
             auto run_query = [&](std::string const &command, std::vector<std::string> &dest) {
                 std::string err;
                 if (!query_lines_locked(command, dest, err)) {
@@ -1979,6 +2026,8 @@ void GrblControlPanel::on_read_firmware_settings()
             run_query("$G", modal_lines);
             run_query("$#", offset_lines);
             run_query("$$", setting_lines);
+        })) {
+            return;
         }
 
         for (auto const &line : setting_lines) {
@@ -2087,9 +2136,8 @@ void GrblControlPanel::on_read_firmware_settings()
             }
             post_status(build_sync_status(snapshot, page_synced, unit_synced), false);
         }, *this));
-    })) {
+    }, _("当前面板正在关闭，无法同步固件参数。"))) {
         set_firmware_syncing_state(false);
-        post_status(_("当前面板正在关闭，无法同步固件参数。"), true);
     }
 }
 
@@ -2138,7 +2186,7 @@ void GrblControlPanel::connect_toggle()
     post_status(make_connect_probe_status(device_for_thread, baud, use_tcp), false);
 
     // Run open/probe on a worker to avoid blocking UI if driver stalls.
-    if (!_workers || !_workers->start(
+    if (!start_short_worker(
             [this, device_for_thread, baud, use_tcp, tcp_host, tcp_port](GrblPanelWorkers::StopFlag const &stop) {
                 if (stop.load(std::memory_order_acquire)) {
                     return;
@@ -2185,10 +2233,9 @@ void GrblControlPanel::connect_toggle()
                     sigc::track_object([this, dev = Glib::ustring(device_for_thread), probe] {
                         finalize_successful_connection_ui(dev, probe);
                     }, *this));
-            })) {
+            }, _("当前面板正在关闭，无法启动连接。"))) {
         set_connecting_state(false);
         _btn_connect.set_active(false);
-        post_status(_("当前面板正在关闭，无法启动连接。"), true);
     }
 }
 
@@ -2443,12 +2490,7 @@ void GrblControlPanel::finish_gcode_stream_ui()
 void GrblControlPanel::finish_gcode_stream_from_worker()
 {
     Glib::signal_idle().connect_once(sigc::track_object([this] {
-        {
-            std::lock_guard const lk(_gcode_stream_thread_mutex);
-            if (_gcode_stream_thread.joinable()) {
-                _gcode_stream_thread.join();
-            }
-        }
+        join_gcode_stream_thread();
         set_gcode_stream_ui_active(false);
         schedule_plot_feedback_refresh(false);
     }, *this));
@@ -2669,19 +2711,9 @@ void GrblControlPanel::on_send_document_direct()
         return;
     }
 
-    {
-        std::lock_guard lk(_gcode_stream_thread_mutex);
-        if (_gcode_stream_thread.joinable()) {
-            _gcode_stream_thread.join();
-        }
-        _gcode_stream_thread = std::thread([this, doc, desktop, selection, use_current_layer_without_selection, params, win]() mutable {
+    start_gcode_stream_thread([this, doc, desktop, selection, use_current_layer_without_selection, params, win]() mutable {
         std::unique_lock<std::mutex> port_lock(_port_mutex);
-        auto const finish = [this, &port_lock] {
-            if (port_lock.owns_lock()) {
-                port_lock.unlock();
-            }
-            finish_gcode_stream_from_worker();
-        };
+        auto const finish = [this, &port_lock] { finish_gcode_stream_worker(port_lock); };
 
         auto *serial = _link ? _link->serial_port() : nullptr;
         if (!serial || !serial->is_open()) {
@@ -2768,8 +2800,7 @@ void GrblControlPanel::on_send_document_direct()
         refresh_plot_feedback_after_gcode_change();
         post_status(make_direct_send_done_status(strokes, stats), false);
         finish();
-        });
-    }
+    });
 }
 
 void GrblControlPanel::on_load_gcode_from_file()
@@ -2891,21 +2922,11 @@ void GrblControlPanel::on_send_gcode()
         return;
     }
 
-    {
-        std::lock_guard lk(_gcode_stream_thread_mutex);
-        if (_gcode_stream_thread.joinable()) {
-            _gcode_stream_thread.join();
-        }
-        _gcode_stream_thread = std::thread(
+    start_gcode_stream_thread(
         [this, text = std::move(text), total_exec, send_from_cursor, editor_line_1]() mutable
         {
             std::unique_lock<std::mutex> port_lock(_port_mutex);
-            auto const finish = [this, &port_lock] {
-                if (port_lock.owns_lock()) {
-                    port_lock.unlock();
-                }
-                finish_gcode_stream_from_worker();
-            };
+            auto const finish = [this, &port_lock] { finish_gcode_stream_worker(port_lock); };
 
             if (!(_link && _link->is_open())) {
                 post_not_connected_status();
@@ -2996,7 +3017,6 @@ void GrblControlPanel::on_send_gcode()
             }
             finish();
         });
-    }
 }
 
 void GrblControlPanel::build_ui()
