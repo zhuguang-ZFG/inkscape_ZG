@@ -126,6 +126,15 @@ bool get_air_travel_ratio_text(Inkscape::Axidraw::GrblPlotStats const &stats, Gl
 bool get_plot_bounds_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::ustring &bounds_out);
 bool get_plot_lengths_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::ustring &lengths_out);
 
+bool send_link_lines(Inkscape::Axidraw::GrblLink &link, std::initializer_list<std::string_view> lines, std::string &err_out)
+{
+    return Inkscape::Axidraw::grbl_send_lines(
+        [&link](std::string const &line, std::string &line_err_out) {
+            return link.send_line_wait_ok(line, line_err_out);
+        },
+        lines, err_out);
+}
+
 Glib::ustring format_duration_compact(double seconds)
 {
     if (!(seconds > 0.0)) {
@@ -2208,10 +2217,7 @@ void GrblControlPanel::jog_axis(char const axis, double const sign, double const
             dstr.setf(std::ios::fixed);
             dstr << std::setprecision(6) << d0;
             int const ifeed = static_cast<int>(feed + 0.5);
-            if (!_link->send_line_wait_ok("G21", e)) {
-                return;
-            }
-            if (!_link->send_line_wait_ok("G91", e)) {
+            if (!send_link_lines(*_link, {"G21", "G91"}, e)) {
                 return;
             }
             {
@@ -2221,7 +2227,7 @@ void GrblControlPanel::jog_axis(char const axis, double const sign, double const
                     return;
                 }
             }
-            if (!_link->send_line_wait_ok("G90", e)) {
+            if (!send_link_lines(*_link, {"G90"}, e)) {
                 return;
             }
         },
@@ -3587,10 +3593,7 @@ void GrblControlPanel::build_ui()
     _btn_xm.signal_clicked().connect([this] { jog_x(-1.0); });
     _btn_set_origin.signal_clicked().connect([this] {
         run_action([this](std::string &e) {
-            if (!_link->send_line_wait_ok("G21", e)) {
-                return;
-            }
-            if (!_link->send_line_wait_ok("G92 X0 Y0 Z0", e)) {
+            if (!send_link_lines(*_link, {"G21", "G92 X0 Y0 Z0"}, e)) {
                 return;
             }
         });
@@ -3598,13 +3601,7 @@ void GrblControlPanel::build_ui()
     _btn_goto_work_zero.signal_clicked().connect([this] {
         run_action(
             [this](std::string &e) {
-                if (!_link->send_line_wait_ok("G21", e)) {
-                    return;
-                }
-                if (!_link->send_line_wait_ok("G90", e)) {
-                    return;
-                }
-                if (!_link->send_line_wait_ok("G0 X0 Y0", e)) {
+                if (!send_link_lines(*_link, {"G21", "G90", "G0 X0 Y0"}, e)) {
                     return;
                 }
             });

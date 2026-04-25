@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <functional>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 
@@ -46,6 +47,21 @@ GrblProbeResult probe_grbl_tcp(std::string const &host, int port);
 /** Write a line to GRBL and wait for an `ok` (skips status / echo noise when possible). */
 bool grbl_send_line(SerialPort &port, std::string const &line, std::string &err_out);
 bool grbl_send_line(TcpPort &port, std::string const &line, std::string &err_out);
+
+/**
+ * Send multiple GRBL commands in order, stopping at the first failure.
+ * The sender must accept `(std::string const &, std::string &)` and return `bool`.
+ */
+template <typename Sender>
+bool grbl_send_lines(Sender &&send_line_wait_ok, std::initializer_list<std::string_view> lines, std::string &err_out)
+{
+    for (auto const line : lines) {
+        if (!send_line_wait_ok(std::string(line), err_out)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 } // namespace Inkscape::Axidraw
 
