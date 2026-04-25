@@ -32,8 +32,7 @@
 #include "ui/dialog/dialog-base.h"
 
 namespace Inkscape::Axidraw {
-class SerialPort;
-class TcpPort;
+class GrblLink;
 struct GrblProbeResult;
 struct GrblExportParams;
 struct GrblExportContext;
@@ -42,6 +41,8 @@ struct GrblExportContext;
 class SPPage;
 
 namespace Inkscape::UI::Dialog {
+
+class GrblPanelWorkers;
 
 class GrblControlPanel final : public DialogBase
 {
@@ -161,15 +162,8 @@ private:
     void refresh_plot_feedback(bool refresh_preview = true);
     bool begin_gcode_stream_ui(Glib::ustring const &status);
     void post_gcode_stream_result(std::string const &err);
-    bool link_is_open() const;
-    bool link_write_bytes(void const *data, size_t len);
-    bool link_read_line(std::string &out, int timeout_ms);
-    bool link_write_line(std::string const &line, std::string &err_out);
-    void link_purge_io();
-    void link_close();
-
-    std::unique_ptr<Inkscape::Axidraw::SerialPort> _port;
-    std::unique_ptr<Inkscape::Axidraw::TcpPort> _tcp_port;
+    std::unique_ptr<GrblPanelWorkers> _workers;
+    std::unique_ptr<Inkscape::Axidraw::GrblLink> _link;
     std::mutex _port_mutex;
     std::atomic<bool> _connecting{false};
     std::atomic<bool> _gcode_sending{false};

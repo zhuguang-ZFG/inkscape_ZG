@@ -44,6 +44,7 @@
 #include <2geom/pathvector.h>
 
 #include "axidraw/device/grbl-client.h"
+#include "axidraw/device/grbl-link.h"
 #include "axidraw/device/serial-port-scan.h"
 #include "axidraw/device/serial-port.h"
 #include "axidraw/device/tcp-port.h"
@@ -61,6 +62,7 @@
 #include "style-enums.h"
 #include "ui/dialog/choose-file-utils.h"
 #include "ui/dialog/choose-file.h"
+#include "ui/dialog/grbl-panel-workers.h"
 #include "ui/dialog-run.h"
 #include "ui/pack.h"
 #include "ui/widget/canvas.h"
@@ -78,7 +80,6 @@ using Inkscape::Axidraw::GrblPlotStats;
 using Inkscape::Axidraw::analyze_grbl_plot;
 using Inkscape::Axidraw::export_paths_to_grbl;
 using Inkscape::Axidraw::grbl_export_params_from_preferences;
-using Inkscape::Axidraw::grbl_send_line;
 using Inkscape::Axidraw::SerialPort;
 using Inkscape::CanvasItemBpath;
 using Inkscape::CanvasItemText;
@@ -922,14 +923,26 @@ GrblControlPanel::GrblControlPanel()
     , _chk_manual_pen_change_prompt(_("手动换笔时弹出确认提示"))
     , _chk_tool_change_point(_("换笔前先去换笔点"))
 {
+    _workers = std::make_unique<GrblPanelWorkers>();
+    _link = std::make_unique<Inkscape::Axidraw::GrblLink>();
     build_ui();
 }
 
 GrblControlPanel::~GrblControlPanel()
 {
     ensure_machine_status_poll(false);
-    std::lock_guard const lk(_port_mutex);
-    link_close();
+    if (_workers) {
+        _workers->request_stop();
+    }
+    {
+        std::lock_guard const lk(_port_mutex);
+        if (_link) {
+            _link->close();
+        }
+    }
+    if (_workers) {
+        _workers->join_all();
+    }
 }
 
 void GrblControlPanel::on_map()
@@ -1299,8 +1312,8 @@ void GrblControlPanel::disconnect_controller(bool const announce_status)
     ensure_machine_status_poll(false);
     {
         std::lock_guard const lk(_port_mutex);
-        if (link_is_open()) {
-            link_close();
+        if (_link && _link->is_open()) {
+            _link->close();
             if (announce_status) {
                 post_status(_("控制器连接已关闭。"), false);
             }
@@ -1697,66 +1710,6 @@ void GrblControlPanel::post_gcode_stream_result(std::string const &err)
     }
 }
 
-bool GrblControlPanel::link_is_open() const
-{
-    return (_port && _port->is_open()) || (_tcp_port && _tcp_port->is_open());
-}
-
-bool GrblControlPanel::link_write_bytes(void const *data, size_t len)
-{
-    if (_port && _port->is_open()) {
-        return _port->write_bytes(data, len);
-    }
-    if (_tcp_port && _tcp_port->is_open()) {
-        return _tcp_port->write_bytes(data, len);
-    }
-    return false;
-}
-
-bool GrblControlPanel::link_read_line(std::string &out, int timeout_ms)
-{
-    if (_port && _port->is_open()) {
-        return _port->read_line(out, timeout_ms);
-    }
-    if (_tcp_port && _tcp_port->is_open()) {
-        return _tcp_port->read_line(out, timeout_ms);
-    }
-    return false;
-}
-
-bool GrblControlPanel::link_write_line(std::string const &line, std::string &err_out)
-{
-    if (_port && _port->is_open()) {
-        return grbl_send_line(*_port, line, err_out);
-    }
-    if (_tcp_port && _tcp_port->is_open()) {
-        return grbl_send_line(*_tcp_port, line, err_out);
-    }
-    err_out = "not connected";
-    return false;
-}
-
-void GrblControlPanel::link_purge_io()
-{
-    if (_port && _port->is_open()) {
-        _port->purge_io();
-    } else if (_tcp_port && _tcp_port->is_open()) {
-        _tcp_port->purge_io();
-    }
-}
-
-void GrblControlPanel::link_close()
-{
-    if (_port) {
-        _port->close();
-        _port.reset();
-    }
-    if (_tcp_port) {
-        _tcp_port->close();
-        _tcp_port.reset();
-    }
-}
-
 void GrblControlPanel::ensure_machine_status_poll(bool const on)
 {
     _machine_status_poll.disconnect();
@@ -1778,28 +1731,35 @@ bool GrblControlPanel::on_machine_status_poll_timeout()
         return true;
     }
 
-    std::thread([this] {
-        std::unique_lock<std::mutex> lk(_port_mutex, std::try_to_lock);
-        if (!lk.owns_lock()) {
-            return;
-        }
-        if (!link_is_open()) {
-            return;
-        }
-        char const q = '?';
-        if (!link_write_bytes(&q, 1)) {
-            return;
-        }
-        std::string line;
-        if (!link_read_line(line, 400)) {
-            return;
-        }
-        // If a prior command left an "ok" ahead of the report, read once more.
-        if (line == "ok" && link_read_line(line, 200)) {
-            // use second line
-        }
-        post_machine_status(Glib::ustring(line));
-    }).detach();
+    if (!_workers || !_workers->start([this](GrblPanelWorkers::StopFlag const &stop) {
+            if (stop.load(std::memory_order_acquire)) {
+                return;
+            }
+            std::unique_lock<std::mutex> lk(_port_mutex, std::try_to_lock);
+            if (!lk.owns_lock() || stop.load(std::memory_order_acquire)) {
+                return;
+            }
+            if (!(_link && _link->is_open())) {
+                return;
+            }
+            char const q = '?';
+            if (!_link->write_bytes(&q, 1)) {
+                return;
+            }
+            std::string line;
+            if (!_link->read_line(line, 400) || stop.load(std::memory_order_acquire)) {
+                return;
+            }
+            // If a prior command left an "ok" ahead of the report, read once more.
+            if (line == "ok" && _link->read_line(line, 200)) {
+                // use second line
+            }
+            if (!stop.load(std::memory_order_acquire)) {
+                post_machine_status(Glib::ustring(line));
+            }
+        })) {
+        return false;
+    }
 
     return true;
 }
@@ -1861,31 +1821,42 @@ void GrblControlPanel::on_port_combo_changed()
 
 void GrblControlPanel::run_action(std::function<void(std::string &)> work, bool const report_ok)
 {
-    std::thread([this, w = std::move(work), report_ok]() mutable {
-        Glib::ustring blocked_reason;
-        if (is_machine_command_blocked(blocked_reason)) {
-            post_status(blocked_reason, true);
-            return;
-        }
-        std::lock_guard const guard(_port_mutex);
-        if (is_machine_command_blocked(blocked_reason)) {
-            post_status(blocked_reason, true);
-            return;
-        }
-        if (!link_is_open()) {
-            post_not_connected_status();
-            return;
-        }
-        std::string err;
-        w(err);
-        if (err.empty()) {
-            if (report_ok) {
-                post_status(_("操作完成。"), false);
+    if (!_workers || !_workers->start([this, w = std::move(work), report_ok](GrblPanelWorkers::StopFlag const &stop) mutable {
+            if (stop.load(std::memory_order_acquire)) {
+                return;
             }
-        } else {
-            post_status(Glib::ustring(Inkscape::Axidraw::grbl_error_to_user_message(err)), true);
-        }
-    }).detach();
+            Glib::ustring blocked_reason;
+            if (is_machine_command_blocked(blocked_reason)) {
+                post_status(blocked_reason, true);
+                return;
+            }
+            std::lock_guard const guard(_port_mutex);
+            if (stop.load(std::memory_order_acquire)) {
+                return;
+            }
+            if (is_machine_command_blocked(blocked_reason)) {
+                post_status(blocked_reason, true);
+                return;
+            }
+            if (!(_link && _link->is_open())) {
+                post_not_connected_status();
+                return;
+            }
+            std::string err;
+            w(err);
+            if (stop.load(std::memory_order_acquire)) {
+                return;
+            }
+            if (err.empty()) {
+                if (report_ok) {
+                    post_status(_("操作完成。"), false);
+                }
+            } else {
+                post_status(Glib::ustring(Inkscape::Axidraw::grbl_error_to_user_message(err)), true);
+            }
+        })) {
+        post_status(_("当前面板正在关闭，无法启动新的控制器命令。"), true);
+    }
 }
 
 void GrblControlPanel::on_read_firmware_settings()
@@ -1893,7 +1864,7 @@ void GrblControlPanel::on_read_firmware_settings()
     if (!begin_firmware_sync()) {
         return;
     }
-    std::thread([this] {
+    if (!_workers || !_workers->start([this](GrblPanelWorkers::StopFlag const &stop) {
         scope_exit const finish_sync{[this] {
             Glib::signal_idle().connect_once(sigc::track_object([this] {
                 set_firmware_syncing_state(false);
@@ -1903,28 +1874,36 @@ void GrblControlPanel::on_read_firmware_settings()
                 schedule_plot_feedback_refresh(false);
             }, *this));
         }};
-        auto query_lines_locked = [this](std::string const &command, std::vector<std::string> &lines_out,
-                                         std::string &err_out) -> bool {
+        if (stop.load(std::memory_order_acquire)) {
+            return;
+        }
+        auto query_lines_locked = [this, &stop](std::string const &command, std::vector<std::string> &lines_out,
+                                                std::string &err_out) -> bool {
             lines_out.clear();
-            if (!link_is_open()) {
+            if (stop.load(std::memory_order_acquire) || !(_link && _link->is_open())) {
                 err_out = "not connected";
                 return false;
             }
 
-            link_purge_io();
+            _link->purge_io();
+            if (stop.load(std::memory_order_acquire)) {
+                err_out = "cancelled";
+                return false;
+            }
 
-            bool const sent = (_port && _port->is_open()) ? _port->write_line(command)
-                                                          : (_tcp_port && _tcp_port->is_open()
-                                                                 ? _tcp_port->write_line(command)
-                                                                 : false);
+            bool const sent = _link && _link->write_line(command);
             if (!sent) {
                 err_out = "serial write failed";
                 return false;
             }
 
             for (;;) {
+                if (stop.load(std::memory_order_acquire)) {
+                    err_out = "cancelled";
+                    return false;
+                }
                 std::string line;
-                if (!link_read_line(line, 1800)) {
+                if (!_link->read_line(line, 1800)) {
                     err_out = "timeout waiting for controller response";
                     return false;
                 }
@@ -1955,7 +1934,7 @@ void GrblControlPanel::on_read_firmware_settings()
 
         {
             std::lock_guard const guard(_port_mutex);
-            if (!link_is_open()) {
+            if (!(_link && _link->is_open())) {
                 post_not_connected_status();
                 return;
             }
@@ -1993,6 +1972,10 @@ void GrblControlPanel::on_read_firmware_settings()
         }
 
         snapshot.display_text = build_firmware_snapshot_text(info_lines, modal_lines, offset_lines, setting_lines, errors);
+
+        if (stop.load(std::memory_order_acquire)) {
+            return;
+        }
 
         Glib::signal_idle().connect_once(sigc::track_object([this, snapshot] {
             auto apply_snapshot_to_ui = [this](GrblFirmwareSnapshot const &snapshot_in, bool &page_synced_out,
@@ -2075,7 +2058,10 @@ void GrblControlPanel::on_read_firmware_settings()
             }
             post_status(build_sync_status(snapshot, page_synced, unit_synced), false);
         }, *this));
-    }).detach();
+    })) {
+        set_firmware_syncing_state(false);
+        post_status(_("当前面板正在关闭，无法同步固件参数。"), true);
+    }
 }
 
 void GrblControlPanel::connect_toggle()
@@ -2123,38 +2109,58 @@ void GrblControlPanel::connect_toggle()
     post_status(make_connect_probe_status(device_for_thread, baud, use_tcp), false);
 
     // Run open/probe on a worker to avoid blocking UI if driver stalls.
-    std::thread([this, device_for_thread, baud, use_tcp, tcp_host, tcp_port] {
-        auto port = std::make_unique<SerialPort>();
-        auto tcp = std::make_unique<Inkscape::Axidraw::TcpPort>();
-        bool const opened = use_tcp ? tcp->open(tcp_host, tcp_port) : port->open(device_for_thread.raw(), baud);
-        if (!opened) {
-            Glib::signal_idle().connect_once(sigc::track_object([this, use_tcp] {
-                finish_connect_attempt_ui(false, describe_connect_open_failure_ui(use_tcp), true);
-            }, *this));
-            return;
-        }
+    if (!_workers || !_workers->start(
+            [this, device_for_thread, baud, use_tcp, tcp_host, tcp_port](GrblPanelWorkers::StopFlag const &stop) {
+                if (stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                auto port = std::make_unique<SerialPort>();
+                auto tcp = std::make_unique<Inkscape::Axidraw::TcpPort>();
+                bool const opened = use_tcp ? tcp->open(tcp_host, tcp_port) : port->open(device_for_thread.raw(), baud);
+                if (stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                if (!opened) {
+                    Glib::signal_idle().connect_once(sigc::track_object([this, use_tcp] {
+                        finish_connect_attempt_ui(false, describe_connect_open_failure_ui(use_tcp), true);
+                    }, *this));
+                    return;
+                }
 
-        auto const probe = use_tcp ? Inkscape::Axidraw::probe_open_grbl(*tcp) : Inkscape::Axidraw::probe_open_grbl(*port);
-        if (!probe.ok) {
-            Glib::signal_idle().connect_once(sigc::track_object([this, probe, baud, dev = Glib::ustring(device_for_thread)] {
-                auto const status = dev.rfind("tcp://", 0) == 0 ? describe_tcp_probe_failure_ui(dev, probe)
-                                                                 : describe_probe_failure_ui(dev, baud, probe);
-                finish_connect_attempt_ui(false, status, true, true);
-            }, *this));
-            return;
-        }
+                auto const probe =
+                    use_tcp ? Inkscape::Axidraw::probe_open_grbl(*tcp) : Inkscape::Axidraw::probe_open_grbl(*port);
+                if (stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                if (!probe.ok) {
+                    Glib::signal_idle().connect_once(
+                        sigc::track_object([this, probe, baud, dev = Glib::ustring(device_for_thread)] {
+                            auto const status = dev.rfind("tcp://", 0) == 0
+                                ? describe_tcp_probe_failure_ui(dev, probe)
+                                : describe_probe_failure_ui(dev, baud, probe);
+                            finish_connect_attempt_ui(false, status, true, true);
+                        }, *this));
+                    return;
+                }
 
-        std::lock_guard guard(_port_mutex);
-        link_close();
-        if (use_tcp) {
-            _tcp_port = std::move(tcp);
-        } else {
-            _port = std::move(port);
-        }
-        Glib::signal_idle().connect_once(sigc::track_object([this, dev = Glib::ustring(device_for_thread), probe] {
-            finalize_successful_connection_ui(dev, probe);
-        }, *this));
-    }).detach();
+                std::lock_guard guard(_port_mutex);
+                if (stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                if (use_tcp) {
+                    _link->set_tcp(std::move(tcp));
+                } else {
+                    _link->set_serial(std::move(port));
+                }
+                Glib::signal_idle().connect_once(
+                    sigc::track_object([this, dev = Glib::ustring(device_for_thread), probe] {
+                        finalize_successful_connection_ui(dev, probe);
+                    }, *this));
+            })) {
+        set_connecting_state(false);
+        _btn_connect.set_active(false);
+        post_status(_("当前面板正在关闭，无法启动连接。"), true);
+    }
 }
 
 double GrblControlPanel::jog_distance_mm() const
@@ -2182,20 +2188,20 @@ void GrblControlPanel::jog_axis(char const axis, double const sign, double const
             dstr.setf(std::ios::fixed);
             dstr << std::setprecision(6) << d0;
             int const ifeed = static_cast<int>(feed + 0.5);
-            if (!link_write_line("G21", e)) {
+            if (!_link->send_line_wait_ok("G21", e)) {
                 return;
             }
-            if (!link_write_line("G91", e)) {
+            if (!_link->send_line_wait_ok("G91", e)) {
                 return;
             }
             {
                 std::ostringstream m;
                 m << "G1 " << axis << dstr.str() << " F" << ifeed;
-                if (!link_write_line(m.str(), e)) {
+                if (!_link->send_line_wait_ok(m.str(), e)) {
                     return;
                 }
             }
-            if (!link_write_line("G90", e)) {
+            if (!_link->send_line_wait_ok("G90", e)) {
                 return;
             }
         },
@@ -2221,12 +2227,12 @@ void GrblControlPanel::soft_reset()
     run_action(
         [this](std::string &e) {
             const char c = 0x18;
-            if (!link_write_bytes(&c, 1)) {
+            if (!_link->write_bytes(&c, 1)) {
                 e = _("无法向串口写入软复位字节");
                 return;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            link_purge_io();
+            _link->purge_io();
             post_status(
                 _("软复位已发送。如果端口不再响应，请先断开再重新连接。"), false);
         },
@@ -2240,7 +2246,7 @@ void GrblControlPanel::send_pen_state(bool const up)
         auto *prefs = Inkscape::Preferences::get();
         Glib::ustring const pctl = prefs->getString(k_pref_pen_control, "z");
         if (pctl == "m3m5" || pctl == "M3M5") {
-            if (!link_write_line(up ? "M5" : "M3 S1000", e)) {
+            if (!_link->send_line_wait_ok(up ? "M5" : "M3 S1000", e)) {
                 return;
             }
         } else {
@@ -2249,7 +2255,7 @@ void GrblControlPanel::send_pen_state(bool const up)
                 e = up ? _("抬笔命令（首选项中设置）为空") : _("落笔命令（首选项中设置）为空");
                 return;
             }
-            if (!link_write_line(cmd.raw(), e)) {
+            if (!_link->send_line_wait_ok(cmd.raw(), e)) {
                 return;
             }
         }
@@ -2597,8 +2603,9 @@ void GrblControlPanel::on_send_document_direct()
         return;
     }
 
-    if (!_port || !_port->is_open()) {
-        if (_tcp_port && _tcp_port->is_open()) {
+    auto *serial = _link ? _link->serial_port() : nullptr;
+    if (!serial || !serial->is_open()) {
+        if (_link && _link->kind() == Inkscape::Axidraw::GrblLink::Kind::tcp && _link->is_open()) {
             post_status(_("“从图稿直接发送”目前仅支持串口直连的流式发送。网络连接请先“从图稿填充”，再发送编辑器中的 G-code。"),
                         true);
         } else {
@@ -2626,7 +2633,8 @@ void GrblControlPanel::on_send_document_direct()
         std::lock_guard const guard(_port_mutex);
         auto const finish = [this] { finish_gcode_stream_ui(); };
 
-        if (!_port || !_port->is_open()) {
+        auto *serial = _link ? _link->serial_port() : nullptr;
+        if (!serial || !serial->is_open()) {
             post_status(_("串口已断开。"), true);
             finish();
             return;
@@ -2701,7 +2709,7 @@ void GrblControlPanel::on_send_document_direct()
         std::string err;
         std::size_t strokes = 0;
         GrblPlotStats stats{};
-        if (!export_paths_to_grbl(*_port, doc, params, ctx, err, &strokes, &stats)) {
+        if (!export_paths_to_grbl(*serial, doc, params, ctx, err, &strokes, &stats)) {
             post_gcode_stream_result(err);
             finish();
             return;
@@ -2838,7 +2846,7 @@ void GrblControlPanel::on_send_gcode()
             std::lock_guard const guard(_port_mutex);
             auto const finish = [this] { finish_gcode_stream_ui(); };
 
-            if (!link_is_open()) {
+            if (!(_link && _link->is_open())) {
                 post_not_connected_status();
                 finish();
                 return;
@@ -2901,7 +2909,7 @@ void GrblControlPanel::on_send_gcode()
                     err = _("G-code 行数过多（已超出限制）。");
                     return;
                 }
-                if (!link_write_line(line, err)) {
+                if (!_link->send_line_wait_ok(line, err)) {
                     write_failed = true;
                     return;
                 }
@@ -3427,14 +3435,14 @@ void GrblControlPanel::build_ui()
                 return;
             }
             std::string const cmd = "[ESP110]pwd=" + pwd + "\n";
-            if (!link_write_bytes(cmd.data(), cmd.size())) {
+            if (!_link->write_bytes(cmd.data(), cmd.size())) {
                 e = _("无法发送无线模式查询命令。");
                 return;
             }
             std::string reply;
             for (int i = 0; i < 8; ++i) {
                 std::string line;
-                if (!link_read_line(line, 1200)) {
+                if (!_link->read_line(line, 1200)) {
                     break;
                 }
                 trim_in_place(line);
@@ -3478,13 +3486,13 @@ void GrblControlPanel::build_ui()
                 return;
             }
             std::string cmd = "[ESP110]" + mode.raw() + "pwd=" + pwd;
-            if (!link_write_line(cmd, e)) {
+            if (!_link->send_line_wait_ok(cmd, e)) {
                 return;
             }
             if (_chk_radio_restart.get_active()) {
                 std::string restart_cmd = "[ESP444]RESTART pwd=" + pwd;
                 std::string restart_err;
-                if (!link_write_line(restart_cmd, restart_err)) {
+                if (!_link->send_line_wait_ok(restart_cmd, restart_err)) {
                     post_status(
                         Glib::ustring::compose(
                             _("无线模式命令已发送，但重启命令失败：%1。你可以手动重新连接。"),
@@ -3513,7 +3521,7 @@ void GrblControlPanel::build_ui()
 
     _btn_mech_home.signal_clicked().connect([this] {
         run_action([this](std::string &e) {
-            if (!link_write_line("$H", e)) {
+            if (!_link->send_line_wait_ok("$H", e)) {
                 return;
             }
         });
@@ -3524,10 +3532,10 @@ void GrblControlPanel::build_ui()
     _btn_xm.signal_clicked().connect([this] { jog_x(-1.0); });
     _btn_set_origin.signal_clicked().connect([this] {
         run_action([this](std::string &e) {
-            if (!link_write_line("G21", e)) {
+            if (!_link->send_line_wait_ok("G21", e)) {
                 return;
             }
-            if (!link_write_line("G92 X0 Y0 Z0", e)) {
+            if (!_link->send_line_wait_ok("G92 X0 Y0 Z0", e)) {
                 return;
             }
         });
@@ -3535,13 +3543,13 @@ void GrblControlPanel::build_ui()
     _btn_goto_work_zero.signal_clicked().connect([this] {
         run_action(
             [this](std::string &e) {
-                if (!link_write_line("G21", e)) {
+                if (!_link->send_line_wait_ok("G21", e)) {
                     return;
                 }
-                if (!link_write_line("G90", e)) {
+                if (!_link->send_line_wait_ok("G90", e)) {
                     return;
                 }
-                if (!link_write_line("G0 X0 Y0", e)) {
+                if (!_link->send_line_wait_ok("G0 X0 Y0", e)) {
                     return;
                 }
             });
@@ -3551,14 +3559,14 @@ void GrblControlPanel::build_ui()
     _btn_pen_down.signal_clicked().connect([this] { send_pen_state(false); });
     _btn_motors.signal_clicked().connect([this] {
         run_action([this](std::string &e) {
-            if (!link_write_line("$SLP", e)) {
+            if (!_link->send_line_wait_ok("$SLP", e)) {
                 return;
             }
         });
     });
     _btn_clear_alarm.signal_clicked().connect([this] {
         run_action([this](std::string &e) {
-            if (!link_write_line("$X", e)) {
+            if (!_link->send_line_wait_ok("$X", e)) {
                 return;
             }
         });

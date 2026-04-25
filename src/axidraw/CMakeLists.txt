@@ -5,6 +5,8 @@ target_sources(inkscape_base PRIVATE
   core/plot-orchestrator.cpp
   device/grbl-client.h
   device/grbl-client.cpp
+  device/grbl-link.h
+  device/grbl-link.cpp
   device/serial-port.h
   device/serial-port.cpp
   device/tcp-port.h

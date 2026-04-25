@@ -8,7 +8,9 @@ TEST(GrblClientTest, ErrorLineDetectionIsCaseInsensitive)
 {
     EXPECT_TRUE(Inkscape::Axidraw::grbl_is_error_line("error:1"));
     EXPECT_TRUE(Inkscape::Axidraw::grbl_is_error_line("ERROR:2"));
-    EXPECT_TRUE(Inkscape::Axidraw::grbl_is_error_line("Alarm then ErRoR text"));
+    EXPECT_TRUE(Inkscape::Axidraw::grbl_is_error_line("  ErRoR:15"));
     EXPECT_FALSE(Inkscape::Axidraw::grbl_is_error_line("ok"));
     EXPECT_FALSE(Inkscape::Axidraw::grbl_is_error_line("<Idle|MPos:0,0,0>"));
+    EXPECT_FALSE(Inkscape::Axidraw::grbl_is_error_line("Alarm then ErRoR text"));
+    EXPECT_FALSE(Inkscape::Axidraw::grbl_is_error_line("[MSG:Last error cleared]"));
 }

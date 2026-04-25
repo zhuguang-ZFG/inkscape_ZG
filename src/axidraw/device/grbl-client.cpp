@@ -24,7 +24,7 @@ char const g_user_cancel_err[] = "INKSCAPE_GRBL_USER_CANCEL";
 static std::function<void()> s_pump;
 static std::atomic<bool> const *s_cancel = nullptr;
 
-bool contains_ascii_case_insensitive(std::string_view haystack, std::string_view needle)
+bool starts_with_ascii_case_insensitive(std::string_view haystack, std::string_view needle)
 {
     if (needle.empty()) {
         return true;
@@ -32,21 +32,14 @@ bool contains_ascii_case_insensitive(std::string_view haystack, std::string_view
     if (haystack.size() < needle.size()) {
         return false;
     }
-    for (std::size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
-        bool ok = true;
-        for (std::size_t j = 0; j < needle.size(); ++j) {
-            auto const h = static_cast<unsigned char>(haystack[i + j]);
-            auto const n = static_cast<unsigned char>(needle[j]);
-            if (std::tolower(h) != std::tolower(n)) {
-                ok = false;
-                break;
-            }
-        }
-        if (ok) {
-            return true;
+    for (std::size_t j = 0; j < needle.size(); ++j) {
+        auto const h = static_cast<unsigned char>(haystack[j]);
+        auto const n = static_cast<unsigned char>(needle[j]);
+        if (std::tolower(h) != std::tolower(n)) {
+            return false;
         }
     }
-    return false;
+    return true;
 }
 
 } // namespace
@@ -96,7 +89,10 @@ std::string grbl_error_to_user_message(std::string const &err)
 
 bool grbl_is_error_line(std::string_view line)
 {
-    return contains_ascii_case_insensitive(line, "error");
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
+        line.remove_prefix(1);
+    }
+    return starts_with_ascii_case_insensitive(line, "error:");
 }
 
 static void grbl_progress_tick()

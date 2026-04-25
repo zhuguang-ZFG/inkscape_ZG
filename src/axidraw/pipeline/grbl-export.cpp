@@ -789,6 +789,9 @@ struct PreparedPlotMm {
     bool preview_align_applied = false;
     double preview_align_shift_x_mm = 0;
     double preview_align_shift_y_mm = 0;
+    bool preview_swap_xy_applied = false;
+    bool preview_invert_x_applied = false;
+    bool preview_invert_y_applied = false;
     bool preview_clip_applied = false;
 
     std::size_t count_strokes() const
@@ -1224,6 +1227,9 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     prep.preview_align_applied = false;
     prep.preview_align_shift_x_mm = 0;
     prep.preview_align_shift_y_mm = 0;
+    prep.preview_swap_xy_applied = false;
+    prep.preview_invert_x_applied = false;
+    prep.preview_invert_y_applied = false;
     prep.preview_clip_applied = false;
 
     if (!doc) {
@@ -1260,6 +1266,9 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
                 prep.preview_page_h_mm = page_h;
             }
             apply_axis_mapping_to_layers(prep.layers_mm, params.swap_xy, params.invert_x, params.invert_y);
+            prep.preview_swap_xy_applied = params.swap_xy;
+            prep.preview_invert_x_applied = params.invert_x;
+            prep.preview_invert_y_applied = params.invert_y;
             if (params.align_content_min_to_origin) {
                 double shx = 0;
                 double shy = 0;
@@ -1269,9 +1278,7 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
                     prep.preview_align_shift_y_mm = shy;
                 }
             }
-            bool const skip_clip = prep.layers_mm.size() > 1 && params.clip_to_machine_bed;
-            if (params.clip_to_machine_bed && params.machine_bed_width_mm > 1e-6 && params.machine_bed_depth_mm > 1e-6
-                && !skip_clip) {
+            if (params.clip_to_machine_bed && params.machine_bed_width_mm > 1e-6 && params.machine_bed_depth_mm > 1e-6) {
                 for (auto &layer : prep.layers_mm) {
                     clip_strokes_to_axis_rect(layer, 0, 0, params.machine_bed_width_mm, params.machine_bed_depth_mm);
                 }
@@ -1340,6 +1347,9 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
         prep.preview_page_h_mm = ph;
     }
     apply_axis_mapping(prep.flat_mm, params.swap_xy, params.invert_x, params.invert_y);
+    prep.preview_swap_xy_applied = params.swap_xy;
+    prep.preview_invert_x_applied = params.invert_x;
+    prep.preview_invert_y_applied = params.invert_y;
     if (params.align_content_min_to_origin) {
         double shx = 0;
         double shy = 0;
@@ -2059,6 +2069,15 @@ static Geom::Point mm_after_plot_mapping_toward_doc(Geom::Point mm, DocumentMmMa
     if (meta.preview_align_applied) {
         mm[Geom::X] += meta.preview_align_shift_x_mm;
         mm[Geom::Y] += meta.preview_align_shift_y_mm;
+    }
+    if (meta.preview_invert_x_applied) {
+        mm[Geom::X] = -mm[Geom::X];
+    }
+    if (meta.preview_invert_y_applied) {
+        mm[Geom::Y] = -mm[Geom::Y];
+    }
+    if (meta.preview_swap_xy_applied) {
+        std::swap(mm[Geom::X], mm[Geom::Y]);
     }
     if (meta.preview_flip_y_applied && meta.preview_page_h_mm > 0) {
         mm[Geom::Y] = meta.preview_page_h_mm - mm[Geom::Y];

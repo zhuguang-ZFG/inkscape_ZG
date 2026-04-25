@@ -5,6 +5,7 @@
 #include "src/axidraw/pipeline/grbl-export.h"
 #include "src/document.h"
 #include "src/inkscape.h"
+#include "src/object/sp-item-group.h"
 #include "src/object/sp-item.h"
 #include "src/selection.h"
 #include "src/util/cast.h"
@@ -454,6 +455,50 @@ TEST_F(GrblExportTest, ClipsGeometryToMachineBed)
     EXPECT_NEAR(*g0y, *g1y, 1e-6);
 }
 
+TEST_F(GrblExportTest, ClipsLayeredGeometryToMachineBed)
+{
+    auto doc = create_axidraw_doc(R"A(
+  <g id="layer1" inkscape:groupmode="layer" inkscape:label="Layer 1">
+    <path id="p1" d="M -10,10 L 20,10" />
+  </g>
+  <g id="layer2" inkscape:groupmode="layer" inkscape:label="Layer 2">
+    <path id="p2" d="M 5,20 L 25,20" />
+  </g>
+)A");
+    ASSERT_TRUE(doc);
+    auto *layer1 = cast<SPGroup>(doc->getObjectById("layer1"));
+    auto *layer2 = cast<SPGroup>(doc->getObjectById("layer2"));
+    ASSERT_TRUE(layer1);
+    ASSERT_TRUE(layer2);
+    layer1->setLayerMode(SPGroup::LAYER);
+    layer2->setLayerMode(SPGroup::LAYER);
+
+    Inkscape::Axidraw::GrblExportParams params;
+    params.auto_pause_between_layers = true;
+    params.clip_to_machine_bed = true;
+    params.machine_bed_width_mm = 15.0;
+    params.machine_bed_depth_mm = 50.0;
+
+    Inkscape::Axidraw::GrblExportContext ctx;
+
+    auto const gcode = build_gcode(doc.get(), params, ctx);
+
+    std::size_t motion_x_count = 0;
+    for (auto const &line : split_lines(gcode)) {
+        if (line.rfind("G0 ", 0) != 0 && line.rfind("G1 ", 0) != 0) {
+            continue;
+        }
+        auto const x = parse_axis(line, 'X');
+        if (!x) {
+            continue;
+        }
+        ++motion_x_count;
+        EXPECT_GE(*x, 0.0) << line;
+        EXPECT_LE(*x, 15.0) << line;
+    }
+    EXPECT_GT(motion_x_count, 0u);
+}
+
 TEST_F(GrblExportTest, FlipsYUsingPageHeight)
 {
     auto doc = create_axidraw_doc(R"A(
@@ -508,6 +553,34 @@ TEST_F(GrblExportTest, MachinePreviewReflectsMappedCoordinates)
     ASSERT_EQ(total, 1);
     ASSERT_EQ(preview.size(), 1);
 
+    auto const initial = preview.front().initialPoint();
+    auto const final = preview.front().finalPoint();
+
+    EXPECT_NEAR(initial[Geom::X], 37.7952755906, 1e-6);
+    EXPECT_NEAR(initial[Geom::Y], 75.5905511811, 1e-6);
+    EXPECT_NEAR(final[Geom::X], 113.3858267717, 1e-6);
+    EXPECT_NEAR(final[Geom::Y], 151.1811023622, 1e-6);
+}
+
+TEST_F(GrblExportTest, MachinePreviewUnmapsSwappedAxes)
+{
+    auto doc = create_axidraw_doc(R"A(
+  <path id="p1" d="M 10,20 L 30,40" />
+)A");
+    ASSERT_TRUE(doc);
+
+    Inkscape::Axidraw::GrblExportParams params;
+    params.swap_xy = true;
+
+    Inkscape::Axidraw::GrblExportContext ctx;
+    Geom::PathVector preview;
+    std::string err;
+
+    ASSERT_TRUE(Inkscape::Axidraw::build_grbl_plot_machine_preview_pathvector_in_doc_space(
+        doc.get(), params, ctx, preview, err))
+        << err;
+
+    ASSERT_EQ(preview.size(), 1);
     auto const initial = preview.front().initialPoint();
     auto const final = preview.front().finalPoint();
 

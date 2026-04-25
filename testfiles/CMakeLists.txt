@@ -257,8 +257,16 @@ add_unit_test(grbl-client-test TEST_SOURCE "grbl-client-test.cpp"
                                        "axidraw/device/serial-port.cpp"
                                        "axidraw/device/tcp-port.cpp"
                             EXTRA_LIBS GLibmm::GLibmm)
+if(WIN32)
+    target_link_libraries(grbl-client-test ws2_32)
+endif()
 add_unit_test(tcp-port-readline-test TEST_SOURCE "tcp-port-readline-test.cpp"
                                       SOURCES "axidraw/device/tcp-port.cpp")
+if(WIN32)
+    target_link_libraries(tcp-port-readline-test ws2_32)
+endif()
+add_unit_test(grbl-panel-workers-test TEST_SOURCE "grbl-panel-workers-test.cpp"
+                                      SOURCES "ui/dialog/grbl-panel-workers.cpp")
 
 add_dependencies(tests unit_tests)
 
