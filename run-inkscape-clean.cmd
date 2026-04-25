@@ -13,4 +13,3 @@ if not exist "%BIN%\inkscape.exe" (
 
 set "PATH=%BIN%;%MSYS_UCRT%;%MSYS_USR%;%PATH%"
 start "" "%BIN%\inkscape.exe" %*
-

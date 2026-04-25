@@ -47,6 +47,7 @@
 
 #include <giomm/file.h>
 #include <glibmm/i18n.h>  // Internationalization
+#include <glibmm/main.h>
 #include <gtkmm/application.h>
 
 #include "inkscape-version-info.h"
@@ -2000,6 +2001,21 @@ void InkscapeApplication::_openStartScreen()
         }
         process_document(document, {});
     });
+
+    // On some Windows setups the startup window can fail to realize and leave the
+    // app running without any visible toplevel. Fall back to a normal document.
+    Glib::signal_timeout().connect_once(sigc::track_object([this, win] {
+        if (win->get_surface()) {
+            return;
+        }
+        win->close();
+        if (!gtk_app()->get_windows().empty()) {
+            return;
+        }
+        if (auto document = document_new()) {
+            process_document(document, {}, true);
+        }
+    }, *win), 3000);
 }
 
 /// Close the start screen, if open.

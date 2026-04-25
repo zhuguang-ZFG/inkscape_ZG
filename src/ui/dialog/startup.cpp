@@ -138,7 +138,7 @@ StartScreen::StartScreen()
     set_focusable(true);
     set_receives_default(true);
     set_default_widget(*this);
-    set_modal(true);
+    set_modal(false);
 
     // Move banner to dialog window
     set_titlebar(banners);

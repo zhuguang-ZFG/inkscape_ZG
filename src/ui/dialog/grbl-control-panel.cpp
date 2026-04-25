@@ -2406,6 +2406,7 @@ void GrblControlPanel::on_restore_page_size()
 void GrblControlPanel::update_connection_controls(RuntimeStateView const &state)
 {
     bool const serial_controls = !state.busy;
+    bool const connected = _link && _link->is_open();
 
     _port_combo.set_sensitive(serial_controls);
     _btn_refresh_ports.set_sensitive(serial_controls);
@@ -2413,7 +2414,7 @@ void GrblControlPanel::update_connection_controls(RuntimeStateView const &state)
     if (state.connecting) {
         _btn_connect.set_label(_("连接中..."));
         _btn_connect.set_tooltip_text(_("正在打开连接并探测控制器，请稍候。"));
-    } else if (_btn_connect.get_active()) {
+    } else if (connected) {
         _btn_connect.set_label(_("断开连接"));
         _btn_connect.set_tooltip_text(_("断开当前绘图机连接。"));
     } else {
