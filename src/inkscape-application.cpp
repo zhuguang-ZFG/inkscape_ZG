@@ -517,14 +517,11 @@ void InkscapeApplication::_start_main_option_section(Glib::ustring const &sectio
 
 InkscapeApplication::InkscapeApplication()
 {
-    startup_trace("ctor: begin");
     if (_instance) {
-        startup_trace("ctor: multiple instances detected");
         std::cerr << "Multiple instances of InkscapeApplication" << std::endl;
         std::terminate();
     }
     _instance = this;
-    startup_trace("ctor: instance assigned");
 
     using T = Gio::Application;
 
@@ -538,10 +535,8 @@ InkscapeApplication::InkscapeApplication()
     // If this flag isn't set, any new instance of Inkscape will be merged with the already running
     // instance of Inkscape before on_open() or on_activate() is called.
     if (auto tag = Glib::getenv("INKSCAPE_APP_ID_TAG"); tag != "") {
-        startup_trace("ctor: app-id tag found");
         app_id += "." + tag;
         if (!Gio::Application::id_is_valid(app_id)) {
-            startup_trace("ctor: app-id invalid");
             std::cerr << "InkscapeApplication: invalid application id: " << app_id.raw() << std::endl;
             std::cerr << "  tag must be ASCII and not start with a number." << std::endl;
         }
@@ -549,69 +544,50 @@ InkscapeApplication::InkscapeApplication()
     } else if (Glib::getenv("SELF_CALL") == "") {
         // Version protection attempts to refuse to merge with inkscape version
         // that have a different build/revision hash. This is important for testing.
-        startup_trace("ctor: creating test_app");
         auto test_app = Gio::Application::create(app_id, flags);
-        startup_trace("ctor: registering test_app");
         test_app->register_application();
-        startup_trace("ctor: test_app registered");
         if (test_app->get_default()->is_remote()) {
-            startup_trace("ctor: test_app is remote");
             bool enabled;
             Glib::VariantBase hint;
             if (!test_app->query_action(Inkscape::inkscape_revision(), enabled, hint)) {
-                startup_trace("ctor: revision action missing, switching to non-unique app id");
                 app_id += "." + Inkscape::inkscape_revision();
                 non_unique = true;
             }
         }
-        startup_trace("ctor: unsetting default app");
         Gio::Application::unset_default();
 
         // Silence wrong warning when test_app is destroyed - https://gitlab.gnome.org/GNOME/glib/-/issues/1857.
         // Previous workaround test_app->run(0, nullptr) was not acceptable as it fires spurious activate signals.
         // Fixme: The warning must be removed upstream, or unregister_application() added so we can call it here.
         g_log_set_default_handler([] (auto...) {}, nullptr);
-        startup_trace("ctor: resetting test_app");
         test_app.reset();
         g_log_set_default_handler(g_log_default_handler, nullptr);
-        startup_trace("ctor: test_app reset complete");
     }
 
-    startup_trace("ctor: before gtk_init_check");
     if (gtk_init_check()) {
-        startup_trace("ctor: gtk_init_check true");
         g_set_prgname(app_id.c_str());
-        startup_trace("ctor: before Gtk::Application::create");
         _gio_application = Gtk::Application::create(app_id, flags);
-        startup_trace("ctor: Gtk::Application created");
     } else {
-        startup_trace("ctor: gtk_init_check false");
         _gio_application = Gio::Application::create(app_id, flags);
         _with_gui = false;
-        startup_trace("ctor: Gio::Application created (headless)");
     }
 
     // Garbage Collector
     Inkscape::GC::init();
-    startup_trace("ctor: GC initialized");
 
     auto *gapp = gio_app();
-    startup_trace("ctor: gio_app acquired");
 
     // Native Language Support
     Inkscape::initialize_gettext();
-    startup_trace("ctor: gettext initialized");
 
     gapp->signal_startup().connect([this]() { this->on_startup(); });
     gapp->signal_activate().connect([this]() { this->on_activate(); });
     gapp->signal_open().connect(sigc::mem_fun(*this, &InkscapeApplication::on_open));
-    startup_trace("ctor: signals connected");
 
     // ==================== Initializations =====================
 #ifndef NDEBUG
     // Use environment variable INKSCAPE_DEBUG_LOG=log.txt for event logging
     Inkscape::Debug::Logger::init();
-    startup_trace("ctor: debug logger initialized");
 #endif
 
     // Don't set application name for now. We don't use it anywhere but
@@ -637,7 +613,6 @@ InkscapeApplication::InkscapeApplication()
     add_actions_tutorial(this);             // actions for opening tutorials (with GUI only)
     add_actions_transform(this);            // actions for transforming selected objects
     add_actions_window(this);               // actions for windows
-    startup_trace("ctor: actions registered");
 
     // ====================== Command Line ======================
 
