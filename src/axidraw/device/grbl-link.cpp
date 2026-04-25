@@ -6,14 +6,13 @@
 #include "serial-port.h"
 #include "tcp-port.h"
 
+#include <cctype>
 #include <utility>
 
 namespace Inkscape::Axidraw {
 
 GrblLink::GrblLink() = default;
 GrblLink::~GrblLink() = default;
-GrblLink::GrblLink(GrblLink &&) noexcept = default;
-GrblLink &GrblLink::operator=(GrblLink &&) noexcept = default;
 
 void GrblLink::set_serial(std::unique_ptr<SerialPort> port)
 {
@@ -48,8 +47,55 @@ SerialPort *GrblLink::serial_port() const noexcept
     return _serial.get();
 }
 
+GrblLink::Activity GrblLink::activity() const noexcept
+{
+    std::lock_guard const lock(_activity_mutex);
+    return _activity;
+}
+
+void GrblLink::set_activity(Activity const activity) noexcept
+{
+    std::lock_guard const lock(_activity_mutex);
+    _activity = activity;
+}
+
+bool GrblLink::query_blocked_bytes(void const *data, std::size_t const len) const noexcept
+{
+    if (activity() != Activity::streaming || !data || len == 0) {
+        return false;
+    }
+    auto const *bytes = static_cast<unsigned char const *>(data);
+    return len == 1 && bytes[0] == '?';
+}
+
+bool GrblLink::query_blocked_line(std::string const &line) const noexcept
+{
+    if (activity() != Activity::streaming) {
+        return false;
+    }
+
+    auto first = line.begin();
+    while (first != line.end() && std::isspace(static_cast<unsigned char>(*first))) {
+        ++first;
+    }
+    if (first == line.end()) {
+        return false;
+    }
+
+    std::string trimmed(first, line.end());
+    while (!trimmed.empty() && std::isspace(static_cast<unsigned char>(trimmed.back()))) {
+        trimmed.pop_back();
+    }
+
+    return trimmed == "?" || trimmed == "$I" || trimmed == "$G" || trimmed == "$#" || trimmed == "$$";
+}
+
 bool GrblLink::write_bytes(void const *data, std::size_t len)
 {
+    if (query_blocked_bytes(data, len)) {
+        grbl_debug_log_write("grbl_link_blocked", "?");
+        return false;
+    }
     if (_serial && _serial->is_open()) {
         return _serial->write_bytes(data, len);
     }
@@ -61,6 +107,10 @@ bool GrblLink::write_bytes(void const *data, std::size_t len)
 
 bool GrblLink::write_line(std::string const &line)
 {
+    if (query_blocked_line(line)) {
+        grbl_debug_log_write("grbl_link_blocked", line);
+        return false;
+    }
     if (_serial && _serial->is_open()) {
         return _serial->write_line(line);
     }
@@ -83,6 +133,11 @@ bool GrblLink::read_line(std::string &out, int timeout_ms)
 
 bool GrblLink::send_line_wait_ok(std::string const &line, std::string &err_out)
 {
+    if (query_blocked_line(line)) {
+        grbl_debug_log_write("grbl_link_blocked", line);
+        err_out = "blocked during streaming";
+        return false;
+    }
     if (_serial && _serial->is_open()) {
         return grbl_send_line(*_serial, line, err_out);
     }
@@ -104,6 +159,7 @@ void GrblLink::purge_io()
 
 void GrblLink::close()
 {
+    set_activity(Activity::idle);
     if (_serial) {
         _serial->close();
         _serial.reset();

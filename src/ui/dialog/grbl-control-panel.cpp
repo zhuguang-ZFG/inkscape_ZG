@@ -1212,6 +1212,9 @@ bool GrblControlPanel::begin_firmware_sync()
     if (!set_runtime_flag(_firmware_syncing, true)) {
         return false;
     }
+    if (_link) {
+        _link->set_activity(Inkscape::Axidraw::GrblLink::Activity::firmware_sync);
+    }
     ensure_machine_status_poll(false);
     return true;
 }
@@ -1220,6 +1223,9 @@ void GrblControlPanel::complete_firmware_sync_ui(bool const resume_machine_statu
                                                  bool const refresh_plot_feedback)
 {
     set_firmware_syncing_state(false);
+    if (_link) {
+        _link->set_activity(Inkscape::Axidraw::GrblLink::Activity::idle);
+    }
     if (resume_machine_status_poll && is_connect_active()) {
         ensure_machine_status_poll(true);
     }
@@ -2466,10 +2472,18 @@ void GrblControlPanel::set_gcode_stream_ui_active(bool const active)
     bool const sending_changed = _gcode_sending.exchange(active, std::memory_order_acq_rel) != active;
     bool const cancel_changed = _gcode_cancel.exchange(false, std::memory_order_acq_rel);
     if (active) {
+        if (_link) {
+            _link->set_activity(Inkscape::Axidraw::GrblLink::Activity::streaming);
+        }
         ensure_machine_status_poll(false);
         _delayed_firmware_sync.disconnect();
     } else if (_btn_connect.get_active() && !_firmware_syncing.load(std::memory_order_acquire)) {
+        if (_link) {
+            _link->set_activity(Inkscape::Axidraw::GrblLink::Activity::idle);
+        }
         ensure_machine_status_poll(true);
+    } else if (_link && !_firmware_syncing.load(std::memory_order_acquire)) {
+        _link->set_activity(Inkscape::Axidraw::GrblLink::Activity::idle);
     }
     if (sending_changed || cancel_changed) {
         refresh_runtime_ui_state();
