@@ -12,7 +12,6 @@
 
 #include <glibmm/miscutils.h>
 #include <gsl/gsl_errno.h>
-
 #ifdef _WIN32
 #include <windows.h> // SetDllDirectoryW, SetConsoleOutputCP
 #undef IGNORE
