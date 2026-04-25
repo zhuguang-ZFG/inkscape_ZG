@@ -151,6 +151,24 @@ static bool grbl_noise_line(std::string const &line)
 }
 
 template <typename PortT>
+static void grbl_wake_port(PortT &port)
+{
+    port.purge_io();
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    port.write_line("");
+    port.write_line("");
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    std::string junk;
+    for (int i = 0; i < 24; ++i) {
+        if (!port.read_line(junk, 80)) {
+            break;
+        }
+    }
+}
+
+template <typename PortT>
 static bool grbl_wait_ok(PortT &port, std::string &err_out)
 {
     for (;;) {
@@ -187,33 +205,68 @@ template <typename PortT>
 static GrblProbeResult probe_open_grbl_impl(PortT &port)
 {
     GrblProbeResult r;
-    port.purge_io();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    {
-        std::string junk;
-        for (int i = 0; i < 20; ++i) {
-            if (!port.read_line(junk, 60)) {
-                break;
+    auto read_probe_lines = [&](int attempts, int timeout_ms) {
+        for (int attempt = 0; attempt < attempts; ++attempt) {
+            std::string line;
+            if (!port.read_line(line, timeout_ms)) {
+                continue;
+            }
+            if (line.empty()) {
+                continue;
+            }
+            r.response_line = std::move(line);
+            if (grbl_is_error_line(r.response_line)) {
+                r.ok = false;
+                return true;
+            }
+            if (grbl_is_probe_response_line(r.response_line)) {
+                r.ok = true;
+                return true;
             }
         }
-    }
+        return false;
+    };
 
-    if (!port.write_line("?")) {
+    grbl_wake_port(port);
+
+    char const q = '?';
+    if ((port.write_bytes(&q, 1) || port.write_line("?")) && read_probe_lines(8, 700)) {
         return r;
     }
 
-    std::string line;
-    if (!port.read_line(line, 2500)) {
+    // Some Bluetooth GRBL variants respond much more reliably to a soft reset
+    // banner than to the initial status poll right after opening the SPP link.
+    char const ctrl_x = 0x18;
+    if (!port.write_bytes(&ctrl_x, 1)) {
+        return r;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    if (read_probe_lines(10, 800)) {
         return r;
     }
 
-    r.response_line = std::move(line);
-    if (grbl_is_error_line(r.response_line)) {
-        r.ok = false;
+    // One last try after the reset banner / wakeup dance.
+    grbl_wake_port(port);
+    if ((port.write_bytes(&q, 1) || port.write_line("?")) && read_probe_lines(8, 800)) {
         return r;
     }
-    r.ok = grbl_is_probe_response_line(r.response_line);
+
+    if (!r.response_line.empty()) {
+        return r;
+    }
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        std::string line;
+        if (!port.read_line(line, 1200)) {
+            continue;
+        }
+        if (line.empty()) {
+            continue;
+        }
+        r.response_line = std::move(line);
+        break;
+    }
+
     return r;
 }
 

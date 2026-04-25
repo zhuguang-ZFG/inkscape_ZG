@@ -22,6 +22,7 @@ public:
     void close();
     bool is_open() const;
     bool last_open_timed_out() const;
+    bool last_open_access_denied() const;
 
     void purge_io();
 
@@ -45,6 +46,7 @@ private:
     int _fd;
 #endif
     bool _last_open_timed_out = false;
+    bool _last_open_access_denied = false;
 };
 
 } // namespace Inkscape::Axidraw

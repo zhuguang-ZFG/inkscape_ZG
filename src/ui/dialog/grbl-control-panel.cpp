@@ -872,8 +872,11 @@ Glib::ustring describe_tcp_probe_failure_ui(Glib::ustring const &device,
     return Glib::ustring::compose(_("无法连接到 %1。\n%2"), device, detail);
 }
 
-Glib::ustring describe_connect_open_failure_ui(bool use_tcp, bool timed_out)
+Glib::ustring describe_connect_open_failure_ui(bool use_tcp, bool timed_out, bool access_denied = false)
 {
+    if (!use_tcp && access_denied) {
+        return _("无法打开所选串口连接：系统拒绝访问该端口。它通常表示串口正被其他程序、另一个 Inkscape 进程或蓝牙串口服务占用。");
+    }
     if (!use_tcp && timed_out) {
         return _("打开所选串口连接超时。请检查串口是否被其他程序占用、驱动是否正常，以及控制器是否已上电。");
     }
@@ -884,6 +887,16 @@ Glib::ustring make_connect_probe_status(Glib::ustring const &device, int baud, b
 {
     return use_tcp ? Glib::ustring::compose(_("正在通过 TCP 探测 %1..."), device)
                    : Glib::ustring::compose(_("正在以 %2 波特探测 %1..."), device, baud);
+}
+
+int serial_open_timeout_for_device(std::string const &device)
+{
+    // Bluetooth SPP devices on Windows often need much longer than USB serial
+    // before CreateFile() returns. Give COM ports extra headroom.
+    if (device.size() >= 3 && device.rfind("COM", 0) == 0) {
+        return 12000;
+    }
+    return 6000;
 }
 
 } // namespace
@@ -2087,16 +2100,26 @@ void GrblControlPanel::start_connect_worker(ConnectRequest request)
                 }
                 auto port = std::make_unique<SerialPort>();
                 auto tcp = std::make_unique<Inkscape::Axidraw::TcpPort>();
+                int const serial_open_timeout_ms = serial_open_timeout_for_device(request.device.raw());
                 bool const opened = request.use_tcp()
                     ? tcp->open(request.tcp_host, request.tcp_port)
-                    : port->open(request.device.raw(), request.baud);
+                    : port->open(request.device.raw(), request.baud, serial_open_timeout_ms);
+                if (!request.use_tcp() && !opened && port->last_open_timed_out() && !stop.load(std::memory_order_acquire)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    if (!stop.load(std::memory_order_acquire)) {
+                        (void)port->open(request.device.raw(), request.baud, serial_open_timeout_ms);
+                    }
+                }
                 if (stop.load(std::memory_order_acquire)) {
                     return;
                 }
-                if (!opened) {
+                if (!(request.use_tcp() ? opened : port->is_open())) {
                     Glib::signal_idle().connect_once(sigc::track_object(
-                        [this, use_tcp = request.use_tcp(), timed_out = !request.use_tcp() && port->last_open_timed_out()] {
-                            finish_connect_attempt_failed_ui(describe_connect_open_failure_ui(use_tcp, timed_out));
+                        [this,
+                         use_tcp = request.use_tcp(),
+                         timed_out = !request.use_tcp() && port->last_open_timed_out(),
+                         access_denied = !request.use_tcp() && port->last_open_access_denied()] {
+                            finish_connect_attempt_failed_ui(describe_connect_open_failure_ui(use_tcp, timed_out, access_denied));
                         },
                         *this));
                     return;

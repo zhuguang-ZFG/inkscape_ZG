@@ -2,9 +2,11 @@
 
 #include "grbl-panel-firmware-sync.h"
 
+#include <chrono>
 #include <cmath>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <glibmm/i18n.h>
@@ -99,6 +101,11 @@ Glib::ustring build_firmware_snapshot_text(std::vector<std::string> const &info_
     return out.str();
 }
 
+bool is_bracket_info_line(std::string const &line)
+{
+    return !line.empty() && line.front() == '[';
+}
+
 } // namespace
 
 void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std::atomic<bool> const &stop)
@@ -109,18 +116,37 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         return;
     }
 
-    auto query_lines_locked = [&context, &stop](std::string const &command, std::vector<std::string> &lines_out,
-                                              std::string &err_out) -> bool {
-        lines_out.clear();
+    auto wake_link_locked = [&context, &stop]() -> bool {
         auto *link = context.link;
         if (stop.load(std::memory_order_acquire) || !(link && link->is_open())) {
-            err_out = "not connected";
             return false;
         }
 
         link->purge_io();
-        if (stop.load(std::memory_order_acquire)) {
-            err_out = "cancelled";
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+        link->write_line("");
+        link->write_line("");
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+        std::string junk;
+        for (int i = 0; i < 24; ++i) {
+            if (!link->read_line(junk, 80)) {
+                break;
+            }
+            if (stop.load(std::memory_order_acquire)) {
+                return false;
+            }
+        }
+        return !stop.load(std::memory_order_acquire);
+    };
+
+    auto query_lines_locked = [&context, &stop](std::string const &command, std::vector<std::string> &lines_out,
+                                                 std::string &err_out) -> bool {
+        lines_out.clear();
+        auto *link = context.link;
+        if (stop.load(std::memory_order_acquire) || !(link && link->is_open())) {
+            err_out = "not connected";
             return false;
         }
 
@@ -136,7 +162,7 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
                 return false;
             }
             std::string line;
-            if (!link->read_line(line, 1800)) {
+            if (!link->read_line(line, 4000)) {
                 err_out = "timeout waiting for controller response";
                 return false;
             }
@@ -173,6 +199,10 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
     GrblFirmwareSnapshot snapshot;
 
     if (!context.with_locked_open_link(stop, [&] {
+        if (!wake_link_locked()) {
+            return;
+        }
+
         auto run_query = [&](std::string const &command, std::vector<std::string> &dest) {
             std::string err;
             if (!query_lines_locked(command, dest, err)) {
@@ -184,6 +214,54 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         run_query("$G", modal_lines);
         run_query("$#", offset_lines);
         run_query("$$", setting_lines);
+
+        if (info_lines.empty() && modal_lines.empty() && offset_lines.empty() && setting_lines.empty() && !stop.load(std::memory_order_acquire)) {
+            errors.clear();
+
+            auto *link = context.link;
+            if (link && link->is_open()) {
+                // Some Bluetooth GRBL variants only respond reliably after a soft reset,
+                // and then expose all useful metadata via `$$` and bracketed info lines.
+                char const ctrl_x = 0x18;
+                if (link->write_bytes(&ctrl_x, 1)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+                    std::string line;
+                    for (int i = 0; i < 16; ++i) {
+                        if (!link->read_line(line, 120)) {
+                            break;
+                        }
+                        if (!line.empty()) {
+                            info_lines.push_back(line);
+                        }
+                    }
+
+                    if (wake_link_locked()) {
+                        std::string err;
+                        std::vector<std::string> combined_lines;
+                        if (!query_lines_locked("$$", combined_lines, err)) {
+                            errors.push_back("$$: " + Inkscape::Axidraw::grbl_error_to_user_message(err));
+                        } else {
+                            for (auto &entry : combined_lines) {
+                                int code = 0;
+                                std::string value;
+                                if (parse_grbl_setting_line(entry, code, value)) {
+                                    setting_lines.push_back(entry);
+                                } else if (is_bracket_info_line(entry)) {
+                                    info_lines.push_back(entry);
+                                } else if (!entry.empty() && entry.front() == '<') {
+                                    offset_lines.push_back(entry);
+                                } else {
+                                    info_lines.push_back(entry);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    errors.emplace_back(_("兼容模式软复位失败。"));
+                }
+            }
+        }
     })) {
         return;
     }

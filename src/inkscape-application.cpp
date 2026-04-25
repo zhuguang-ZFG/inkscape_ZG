@@ -1002,6 +1002,19 @@ void InkscapeApplication::on_activate()
     } else if (_with_gui)  {
         if (gtk_app()->get_windows().empty() && Inkscape::UI::Dialog::StartScreen::get_start_mode() > 0) {
             _openStartScreen();
+            // Secondary startup watchdog for Windows-like no-toplevel failures:
+            // if no window exists shortly after requesting the start screen,
+            // force-open a normal document window so the process does not remain headless.
+            Glib::signal_timeout().connect_once([this] {
+                if (!_with_gui || !gtk_app() || !gtk_app()->get_windows().empty()) {
+                    return;
+                }
+                std::cerr << "InkscapeApplication::on_activate: no toplevel after start screen, opening fallback document."
+                          << std::endl;
+                if (auto fallback_document = document_new()) {
+                    process_document(fallback_document, {}, true);
+                }
+            }, 6000);
             return;
         }
         _closeStartScreen();

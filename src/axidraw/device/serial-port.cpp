@@ -60,6 +60,11 @@ bool SerialPort::last_open_timed_out() const
     return _last_open_timed_out;
 }
 
+bool SerialPort::last_open_access_denied() const
+{
+    return _last_open_access_denied;
+}
+
 void SerialPort::close()
 {
 #ifdef _WIN32
@@ -113,6 +118,7 @@ bool SerialPort::open(std::string device, int baud_rate, int open_timeout_ms)
 {
     close();
     _last_open_timed_out = false;
+    _last_open_access_denied = false;
     if (device.empty() || baud_rate <= 0) {
         return false;
     }
@@ -136,12 +142,14 @@ bool SerialPort::open(std::string device, int baud_rate, int open_timeout_ms)
             std::atomic<bool> abandon{false};
             bool done = false;
             HANDLE handle = INVALID_HANDLE_VALUE;
+            DWORD error = ERROR_SUCCESS;
         };
 
         auto state = std::make_shared<AsyncOpenState>();
         std::thread worker([state, device] {
             HANDLE h =
                 CreateFileA(device.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+            DWORD const err = h == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
             if (state->abandon.load(std::memory_order_acquire) && h != INVALID_HANDLE_VALUE) {
                 CloseHandle(h);
                 h = INVALID_HANDLE_VALUE;
@@ -149,6 +157,7 @@ bool SerialPort::open(std::string device, int baud_rate, int open_timeout_ms)
             {
                 std::lock_guard<std::mutex> lock(state->mutex);
                 state->handle = h;
+                state->error = err;
                 state->done = true;
             }
             state->cv.notify_one();
@@ -173,6 +182,7 @@ bool SerialPort::open(std::string device, int baud_rate, int open_timeout_ms)
 
         if (completed) {
             worker.join();
+            _last_open_access_denied = state->handle == INVALID_HANDLE_VALUE && state->error == ERROR_ACCESS_DENIED;
         } else {
             worker.detach();
         }
