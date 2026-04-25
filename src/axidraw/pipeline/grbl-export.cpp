@@ -53,6 +53,16 @@ constexpr double k_px_per_in = 96.0;
 constexpr double k_mm_per_px = k_mm_per_in / k_px_per_in;
 constexpr double k_machine_coord_epsilon_mm = 1e-3;
 
+bool emit_optional_dwell_ms(std::function<bool(std::string const &)> const &emit_line, double const delay_ms)
+{
+    if (!(delay_ms > 1e-9)) {
+        return true;
+    }
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "G4 P%.3f", delay_ms / 1000.0);
+    return emit_line(buf);
+}
+
 struct DocumentMmMapper {
     double origin_x_doc = 0.0;
     double origin_y_doc = 0.0;
@@ -1421,7 +1431,7 @@ static std::size_t count_drawable_strokes_layers_mm(
 static std::size_t estimate_emit_lines_flat(std::vector<std::vector<Geom::Point>> const &strokes_mm,
                                               [[maybe_unused]] GrblExportParams const &params)
 {
-    std::size_t n = 2 + count_custom_gcode_lines(params.start_gcode) + count_custom_gcode_lines(params.end_gcode);
+    std::size_t n = 3 + count_custom_gcode_lines(params.start_gcode) + count_custom_gcode_lines(params.end_gcode);
     for (auto const &stroke : strokes_mm) {
         if (stroke.size() < 2) {
             continue;
@@ -1436,7 +1446,7 @@ static std::size_t estimate_emit_lines_flat(std::vector<std::vector<Geom::Point>
 static std::size_t estimate_emit_lines_layered(
     PreparedPlotMm const &prep, GrblExportParams const &params)
 {
-    std::size_t n = 2 + count_custom_gcode_lines(params.start_gcode) + count_custom_gcode_lines(params.end_gcode);
+    std::size_t n = 3 + count_custom_gcode_lines(params.start_gcode) + count_custom_gcode_lines(params.end_gcode);
     int active_tool = -1;
     for (std::size_t li = 0; li < prep.layers_mm.size(); ++li) {
         int const next_tool = li < prep.layer_tool_ids.size() ? prep.layer_tool_ids[li] : -1;
@@ -1553,6 +1563,9 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
     if (!emit_line("G90")) {
         return false;
     }
+    if (!emit_line("G92 X0 Y0 Z0")) {
+        return false;
+    }
     if (!emit_custom_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, params.start_gcode)) {
         return false;
     }
@@ -1581,6 +1594,9 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
         if (!emit_line((use_long_pen_up ? long_pen_up : pen_up).raw())) {
             return false;
         }
+        if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
+            return false;
+        }
 
         if (!has_prev_end || !Geom::are_near(stroke.front(), prev_end, k_machine_coord_epsilon_mm)) {
             if (!emit_line(format_xy_mm(stroke.front(), "G0", params.feed_travel_mm_min))) {
@@ -1589,6 +1605,9 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
         }
 
         if (!emit_line(pen_dn.raw())) {
+            return false;
+        }
+        if (!emit_optional_dwell_ms(emit_line, params.pen_down_delay_ms)) {
             return false;
         }
 
@@ -1606,6 +1625,9 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
     }
 
     if (!emit_line(pen_up.raw())) {
+        return false;
+    }
+    if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
         return false;
     }
     if (!emit_custom_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, params.end_gcode)) {
@@ -1632,6 +1654,9 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
         return false;
     }
     if (!emit_line("G90")) {
+        return false;
+    }
+    if (!emit_line("G92 X0 Y0 Z0")) {
         return false;
     }
     if (!emit_custom_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, params.start_gcode)) {
@@ -1664,12 +1689,18 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
             if (!emit_line((use_long_pen_up ? long_pen_up : pen_up).raw())) {
                 return false;
             }
+            if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
+                return false;
+            }
             if (!has_last || !Geom::are_near(stroke.front(), last_mm, k_machine_coord_epsilon_mm)) {
                 if (!emit_line(format_xy_mm(stroke.front(), "G0", params.feed_travel_mm_min))) {
                     return false;
                 }
             }
             if (!emit_line(pen_dn.raw())) {
+                return false;
+            }
+            if (!emit_optional_dwell_ms(emit_line, params.pen_down_delay_ms)) {
                 return false;
             }
             for (size_t i = 1; i < stroke.size(); ++i) {
@@ -1699,6 +1730,9 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
             Geom::Point const resume = last_mm;
 
             if (!emit_line(pen_up.raw())) {
+                return false;
+            }
+            if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
                 return false;
             }
 
@@ -1757,6 +1791,9 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
     }
 
     if (!emit_line(pen_up.raw())) {
+        return false;
+    }
+    if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
         return false;
     }
     if (!emit_custom_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, params.end_gcode)) {
@@ -1848,6 +1885,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     constexpr auto k_ft = "/options/grbl/feed-travel-mmmin";
     constexpr auto k_pen_up = "/options/grbl/pen-up-cmd";
     constexpr auto k_pen_dn = "/options/grbl/pen-down-cmd";
+    constexpr auto k_pen_up_delay = "/options/grbl/pen-up-delay-ms";
+    constexpr auto k_pen_down_delay = "/options/grbl/pen-down-delay-ms";
     constexpr auto k_pen_ctl = "/options/grbl/pen-control";
     constexpr auto k_long_pen_up = "/options/grbl/enable-long-pen-up";
     constexpr auto k_long_pen_up_mm = "/options/grbl/long-pen-up-mm";
@@ -1895,6 +1934,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
             params.enable_long_pen_up = prefs->getBool(k_long_pen_up, false);
         }
     }
+    params.pen_up_delay_ms = prefs->getDoubleLimited(k_pen_up_delay, 0.0, 0.0, 5000.0);
+    params.pen_down_delay_ms = prefs->getDoubleLimited(k_pen_down_delay, 0.0, 0.0, 5000.0);
     params.long_pen_up_mm = prefs->getDoubleLimited(k_long_pen_up_mm, 10.0, -1000.0, 1000.0);
     params.long_move_distance_mm = prefs->getDoubleLimited(k_long_move_dist, 20.0, 0.0, 100000.0);
     params.enable_near_connect = prefs->getBool(k_near_connect, false);

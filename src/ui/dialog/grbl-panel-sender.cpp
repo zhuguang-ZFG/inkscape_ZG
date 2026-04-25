@@ -3,12 +3,17 @@
 #include "grbl-panel-sender.h"
 
 #include <chrono>
+#include <condition_variable>
 #include <iomanip>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 #include <glibmm/i18n.h>
+#include <glibmm/main.h>
 #include <glibmm/ustring.h>
 #include <gtkmm/messagedialog.h>
 
@@ -23,6 +28,25 @@ namespace {
 constexpr int k_gcode_send_progress_min_interval_ms = 350;
 constexpr std::size_t k_gcode_send_progress_line_stride = 80;
 constexpr std::size_t k_max_gcode_stream_lines = 200000;
+
+void prepare_stream_link(Inkscape::Axidraw::GrblLink *link)
+{
+    if (!(link && link->is_open())) {
+        return;
+    }
+
+    // Clear any delayed replies from connect/probe/firmware-sync/status-poll work
+    // so the first streamed G-code line cannot consume a stale "ok".
+    link->purge_io();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::string junk;
+    for (int i = 0; i < 20; ++i) {
+        if (!link->read_line(junk, 60)) {
+            break;
+        }
+    }
+}
 
 template <typename Func>
 void for_each_executable_gcode_line(std::string const &text, Func &&func)
@@ -172,14 +196,33 @@ Inkscape::Axidraw::GrblExportContext make_direct_send_context(SPDesktop *desktop
     ctx.cancel = cancel;
 
     if (win) {
-        ctx.on_manual_pen_change_between_layers = [win](double, double) -> bool {
-            Gtk::MessageDialog dlg(
-                *win,
-                _("The next layer is about to start drawing.\nIf you are plotting by layer or color, change the pen now and click Yes to continue."),
-                true, Gtk::MessageType::QUESTION, Gtk::ButtonsType::YES_NO, true);
-            dlg.set_secondary_text(
-                _("This follows the AxiDraw-style manual pen-change flow: raise pen, optionally return home, confirm, then resume from the pause point."));
-            return Inkscape::UI::dialog_run(dlg) == Gtk::ResponseType::YES;
+        ctx.on_manual_pen_change_between_layers = [win](double const resume_x_mm, double const resume_y_mm) -> bool {
+            std::mutex mutex;
+            std::condition_variable cv;
+            std::optional<bool> accepted;
+
+            Glib::signal_idle().connect_once([win, resume_x_mm, resume_y_mm, &mutex, &cv, &accepted] {
+                Gtk::MessageDialog dlg(
+                    *win,
+                    _("下一图层即将开始绘制。\n请现在换笔，然后点击“是”继续。"),
+                    false, Gtk::MessageType::QUESTION, Gtk::ButtonsType::YES_NO, true);
+                dlg.set_title(_("手动换笔"));
+                dlg.set_secondary_text(
+                    Glib::ustring::compose(
+                        _("流程：先抬笔；如果启用了“先回原点换笔”，机器会先回到 X0 Y0；确认后再回到断点继续。\n继续位置：X=%1 mm, Y=%2 mm"),
+                        Glib::ustring::format(std::fixed, std::setprecision(3), resume_x_mm),
+                        Glib::ustring::format(std::fixed, std::setprecision(3), resume_y_mm)));
+                auto const response = Inkscape::UI::dialog_run(dlg);
+                {
+                    std::lock_guard const lock(mutex);
+                    accepted = (response == Gtk::ResponseType::YES);
+                }
+                cv.notify_one();
+            });
+
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&accepted] { return accepted.has_value(); });
+            return *accepted;
         };
     }
 
@@ -249,6 +292,8 @@ void GrblPanelSender::run_direct_send_worker(GrblPanelSenderContext const &conte
         return;
     }
 
+    prepare_stream_link(context.link);
+
     auto ctx = make_direct_send_context(desktop, selection, use_current_layer_without_selection, context.cancel,
                                         params.manual_pen_change && params.pen_change_prompt ? win : nullptr);
     attach_direct_send_progress_callbacks(context.post_status, ctx);
@@ -288,6 +333,8 @@ void GrblPanelSender::run_editor_gcode_send_worker(GrblPanelSenderContext const 
                                    static_cast<guint64>(editor_line_1)),
             false);
     }
+
+    prepare_stream_link(link);
 
     GcodeSendProgressTracker progress{.post_status = context.post_status, .total_exec = total_exec};
 

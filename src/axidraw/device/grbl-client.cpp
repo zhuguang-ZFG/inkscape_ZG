@@ -214,9 +214,11 @@ static bool grbl_wait_ok(PortT &port, std::string &err_out)
         grbl_progress_tick();
         std::string line;
         if (!port.read_line(line, 8000)) {
+            grbl_debug_log_write("grbl_read_timeout", "timeout waiting for controller response");
             err_out = "timeout waiting for controller response";
             return false;
         }
+        grbl_debug_log_write("grbl_read_line", line);
         if (grbl_noise_line(line)) {
             continue;
         }
@@ -321,7 +323,11 @@ static bool grbl_send_line_impl(PortT &port, std::string const &line, std::strin
         err_out = "serial write failed";
         return false;
     }
-    return grbl_wait_ok(port, err_out);
+    if (!grbl_wait_ok(port, err_out)) {
+        grbl_debug_log_write("grbl_send_error", line + " => " + err_out);
+        return false;
+    }
+    return true;
 }
 
 bool grbl_send_line(SerialPort &port, std::string const &line, std::string &err_out)

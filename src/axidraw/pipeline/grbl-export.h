@@ -51,6 +51,9 @@ struct GrblExportParams {
     double feed_travel_mm_min = 6000.0;
     Glib::ustring pen_up_cmd = "G1 Z0 F3000";
     Glib::ustring pen_down_cmd = "G1 Z5 F3000";
+    /// Optional dwell after pen-up / pen-down commands to let the mechanism settle.
+    double pen_up_delay_ms = 0.0;
+    double pen_down_delay_ms = 0.0;
     /// Optional higher pen-up move used before long travel moves.
     bool enable_long_pen_up = false;
     double long_pen_up_mm = 10.0;

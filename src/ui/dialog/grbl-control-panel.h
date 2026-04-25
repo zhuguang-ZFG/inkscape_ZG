@@ -286,6 +286,12 @@ private:
     Gtk::CheckButton _chk_manual_pen_change_to_home;
     Gtk::CheckButton _chk_manual_pen_change_prompt;
     Gtk::CheckButton _chk_tool_change_point;
+    Gtk::SpinButton _draw_feed_spin;
+    Gtk::SpinButton _travel_feed_spin;
+    Gtk::SpinButton _pen_up_delay_spin;
+    Gtk::SpinButton _pen_down_delay_spin;
+    Gtk::Entry _pen_up_cmd_entry;
+    Gtk::Entry _pen_down_cmd_entry;
     Gtk::SpinButton _bed_width_spin;
     Gtk::SpinButton _bed_depth_spin;
     Gtk::SpinButton _long_pen_up_spin;

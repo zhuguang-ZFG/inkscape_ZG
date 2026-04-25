@@ -300,7 +300,11 @@ bool SerialPort::write_line(std::string_view line)
     if (!buf.empty() && (buf.back() == '\n' || buf.back() == '\r')) {
         // already terminated
     } else {
-        buf.append("\r\n");
+        // Some GRBL-derived Bluetooth/ESP32 firmwares treat CR and LF as two
+        // separate line terminators and may emit duplicate "ok" replies for
+        // one command when sent CRLF. Use a single LF to keep host/controller
+        // ack accounting aligned.
+        buf.push_back('\n');
     }
     return write_bytes(buf.data(), buf.size());
 }
