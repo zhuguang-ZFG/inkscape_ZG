@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
@@ -100,6 +101,8 @@ private:
     void refresh_runtime_ui_state();
     bool begin_firmware_sync();
     void finish_gcode_stream_ui();
+    /// Rejoins the G-code stream worker on the main loop, then mirrors @ref finish_gcode_stream_ui.
+    void finish_gcode_stream_from_worker();
     void set_controls_sensitive_for_gcode_stream(bool allow);
     void update_action_button_labels();
     void update_connection_controls();
@@ -164,6 +167,8 @@ private:
     void post_gcode_stream_result(std::string const &err);
     std::unique_ptr<GrblPanelWorkers> _workers;
     std::unique_ptr<Inkscape::Axidraw::GrblLink> _link;
+    std::mutex _gcode_stream_thread_mutex;
+    std::thread _gcode_stream_thread;
     std::mutex _port_mutex;
     std::atomic<bool> _connecting{false};
     std::atomic<bool> _gcode_sending{false};

@@ -931,6 +931,13 @@ GrblControlPanel::GrblControlPanel()
 GrblControlPanel::~GrblControlPanel()
 {
     ensure_machine_status_poll(false);
+    _gcode_cancel.store(true, std::memory_order_release);
+    {
+        std::lock_guard const lk_gcode(_gcode_stream_thread_mutex);
+        if (_gcode_stream_thread.joinable()) {
+            _gcode_stream_thread.join();
+        }
+    }
     if (_workers) {
         _workers->request_stop();
     }
@@ -2427,6 +2434,20 @@ void GrblControlPanel::finish_gcode_stream_ui()
     }, *this));
 }
 
+void GrblControlPanel::finish_gcode_stream_from_worker()
+{
+    Glib::signal_idle().connect_once(sigc::track_object([this] {
+        {
+            std::lock_guard const lk(_gcode_stream_thread_mutex);
+            if (_gcode_stream_thread.joinable()) {
+                _gcode_stream_thread.join();
+            }
+        }
+        set_gcode_stream_ui_active(false);
+        schedule_plot_feedback_refresh(false);
+    }, *this));
+}
+
 void GrblControlPanel::on_cancel_gcode_stream()
 {
     if (!has_active_gcode_stream()) {
@@ -2642,9 +2663,19 @@ void GrblControlPanel::on_send_document_direct()
         return;
     }
 
-    std::thread([this, doc, desktop, selection, use_current_layer_without_selection, params, win]() mutable {
-        std::lock_guard const guard(_port_mutex);
-        auto const finish = [this] { finish_gcode_stream_ui(); };
+    {
+        std::lock_guard lk(_gcode_stream_thread_mutex);
+        if (_gcode_stream_thread.joinable()) {
+            _gcode_stream_thread.join();
+        }
+        _gcode_stream_thread = std::thread([this, doc, desktop, selection, use_current_layer_without_selection, params, win]() mutable {
+        std::unique_lock<std::mutex> port_lock(_port_mutex);
+        auto const finish = [this, &port_lock] {
+            if (port_lock.owns_lock()) {
+                port_lock.unlock();
+            }
+            finish_gcode_stream_from_worker();
+        };
 
         auto *serial = _link ? _link->serial_port() : nullptr;
         if (!serial || !serial->is_open()) {
@@ -2731,7 +2762,8 @@ void GrblControlPanel::on_send_document_direct()
         refresh_plot_feedback_after_gcode_change();
         post_status(make_direct_send_done_status(strokes, stats), false);
         finish();
-    }).detach();
+        });
+    }
 }
 
 void GrblControlPanel::on_load_gcode_from_file()
@@ -2853,11 +2885,21 @@ void GrblControlPanel::on_send_gcode()
         return;
     }
 
-    std::thread(
+    {
+        std::lock_guard lk(_gcode_stream_thread_mutex);
+        if (_gcode_stream_thread.joinable()) {
+            _gcode_stream_thread.join();
+        }
+        _gcode_stream_thread = std::thread(
         [this, text = std::move(text), total_exec, send_from_cursor, editor_line_1]() mutable
         {
-            std::lock_guard const guard(_port_mutex);
-            auto const finish = [this] { finish_gcode_stream_ui(); };
+            std::unique_lock<std::mutex> port_lock(_port_mutex);
+            auto const finish = [this, &port_lock] {
+                if (port_lock.owns_lock()) {
+                    port_lock.unlock();
+                }
+                finish_gcode_stream_from_worker();
+            };
 
             if (!(_link && _link->is_open())) {
                 post_not_connected_status();
@@ -2947,8 +2989,8 @@ void GrblControlPanel::on_send_gcode()
                     Glib::ustring::compose(_("已发送 %1 行 G-code。"), static_cast<guint64>(sent)), false);
             }
             finish();
-        })
-        .detach();
+        });
+    }
 }
 
 void GrblControlPanel::build_ui()
