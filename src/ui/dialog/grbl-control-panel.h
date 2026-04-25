@@ -69,6 +69,14 @@ private:
         bool connecting = false;
         bool firmware_sync = false;
     };
+    struct ConnectRequest {
+        Glib::ustring device;
+        int baud = 115200;
+        std::string tcp_host;
+        int tcp_port = 0;
+
+        bool use_tcp() const { return !tcp_host.empty() && tcp_port > 0; }
+    };
 
     void build_ui();
     void on_map() override;
@@ -141,6 +149,8 @@ private:
 
     void refresh_port_list();
     void on_port_combo_changed();
+    bool resolve_connect_request(ConnectRequest &request);
+    void start_connect_worker(ConnectRequest request);
     void ensure_machine_status_poll(bool on);
     bool on_machine_status_poll_timeout();
     void post_machine_status(Glib::ustring const &text);

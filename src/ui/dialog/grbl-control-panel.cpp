@@ -2036,6 +2036,99 @@ void GrblControlPanel::on_port_combo_changed()
     prefs->save();
 }
 
+bool GrblControlPanel::resolve_connect_request(ConnectRequest &request)
+{
+    auto *prefs = Inkscape::Preferences::get();
+    request.device = prefs->getString(k_pref_device);
+    if (request.device.empty()) {
+        request.device = _port_combo.get_active_id();
+        if (request.device.empty()) {
+            request.device = _port_combo.get_active_text();
+        }
+        if (!request.device.empty()) {
+            prefs->setString(k_pref_device, request.device);
+            prefs->save();
+        }
+    }
+    if (request.device.empty()) {
+        _btn_connect.set_active(false);
+        post_status(_("请先在上方选择串口，或在“首选项”的 GRBL 标签页中设置“串口设备”。"), true);
+        return false;
+    }
+
+    request.baud = prefs->getIntLimited(k_pref_baud, 115200, 9600, 230400);
+    parse_tcp_device_spec(request.device.raw(), request.tcp_host, request.tcp_port);
+    if (!request.use_tcp()) {
+        Glib::ustring const host = prefs->getString(k_pref_net_host);
+        int const net_port = prefs->getIntLimited(k_pref_net_port, 23, 1, 65535);
+        if (!host.empty()) {
+            request.device = "tcp://" + host + ":" + std::to_string(net_port);
+            request.tcp_host = host.raw();
+            request.tcp_port = net_port;
+        }
+    }
+    return true;
+}
+
+void GrblControlPanel::start_connect_worker(ConnectRequest request)
+{
+    begin_connect_attempt_ui(make_connect_probe_status(request.device, request.baud, request.use_tcp()));
+
+    // Run open/probe on a worker to avoid blocking UI if driver stalls.
+    if (!start_short_worker(
+            [this, request = std::move(request)](GrblPanelWorkers::StopFlag const &stop) {
+                if (stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                auto port = std::make_unique<SerialPort>();
+                auto tcp = std::make_unique<Inkscape::Axidraw::TcpPort>();
+                bool const opened = request.use_tcp()
+                    ? tcp->open(request.tcp_host, request.tcp_port)
+                    : port->open(request.device.raw(), request.baud);
+                if (stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                if (!opened) {
+                    Glib::signal_idle().connect_once(sigc::track_object([this, use_tcp = request.use_tcp()] {
+                        finish_connect_attempt_ui(false, describe_connect_open_failure_ui(use_tcp), true);
+                    }, *this));
+                    return;
+                }
+
+                auto const probe = request.use_tcp()
+                    ? Inkscape::Axidraw::probe_open_grbl(*tcp)
+                    : Inkscape::Axidraw::probe_open_grbl(*port);
+                if (stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                if (!probe.ok) {
+                    Glib::signal_idle().connect_once(sigc::track_object([this, probe, request] {
+                        auto const status = request.use_tcp()
+                            ? describe_tcp_probe_failure_ui(request.device, probe)
+                            : describe_probe_failure_ui(request.device, request.baud, probe);
+                        finish_connect_attempt_ui(false, status, true, true);
+                    }, *this));
+                    return;
+                }
+
+                std::lock_guard guard(_port_mutex);
+                if (stop.load(std::memory_order_acquire)) {
+                    return;
+                }
+                if (request.use_tcp()) {
+                    _link->set_tcp(std::move(tcp));
+                } else {
+                    _link->set_serial(std::move(port));
+                }
+                Glib::signal_idle().connect_once(sigc::track_object([this, device = request.device, probe] {
+                    finalize_successful_connection_ui(device, probe);
+                }, *this));
+            }, _("当前面板正在关闭，无法启动连接。"))) {
+        set_connecting_state(false);
+        _btn_connect.set_active(false);
+    }
+}
+
 void GrblControlPanel::run_action(std::function<void(std::string &)> work, bool const report_ok)
 {
     if (!start_short_worker([this, w = std::move(work), report_ok](GrblPanelWorkers::StopFlag const &stop) mutable {
@@ -2092,93 +2185,11 @@ void GrblControlPanel::connect_toggle()
         return;
     }
 
-    auto *prefs = Inkscape::Preferences::get();
-    Glib::ustring device = prefs->getString(k_pref_device);
-    if (device.empty()) {
-        device = _port_combo.get_active_id();
-        if (device.empty()) {
-            device = _port_combo.get_active_text();
-        }
-        if (!device.empty()) {
-            prefs->setString(k_pref_device, device);
-            prefs->save();
-        }
-    }
-    if (device.empty()) {
-        _btn_connect.set_active(false);
-        post_status(_("请先在上方选择串口，或在“首选项”的 GRBL 标签页中设置“串口设备”。"), true);
+    ConnectRequest request;
+    if (!resolve_connect_request(request)) {
         return;
     }
-
-    int const baud = prefs->getIntLimited(k_pref_baud, 115200, 9600, 230400);
-    Glib::ustring device_for_thread = device;
-    std::string tcp_host;
-    int tcp_port = 0;
-    bool const tcp_mode = parse_tcp_device_spec(device.raw(), tcp_host, tcp_port);
-    if (!tcp_mode && device_for_thread.empty()) {
-        Glib::ustring const host = prefs->getString(k_pref_net_host);
-        int const net_port = prefs->getIntLimited(k_pref_net_port, 23, 1, 65535);
-        if (!host.empty()) {
-            device_for_thread = "tcp://" + host + ":" + std::to_string(net_port);
-            tcp_host = host.raw();
-            tcp_port = net_port;
-        }
-    }
-    bool const use_tcp = !tcp_host.empty() && tcp_port > 0;
-    begin_connect_attempt_ui(make_connect_probe_status(device_for_thread, baud, use_tcp));
-
-    // Run open/probe on a worker to avoid blocking UI if driver stalls.
-    if (!start_short_worker(
-            [this, device_for_thread, baud, use_tcp, tcp_host, tcp_port](GrblPanelWorkers::StopFlag const &stop) {
-                if (stop.load(std::memory_order_acquire)) {
-                    return;
-                }
-                auto port = std::make_unique<SerialPort>();
-                auto tcp = std::make_unique<Inkscape::Axidraw::TcpPort>();
-                bool const opened = use_tcp ? tcp->open(tcp_host, tcp_port) : port->open(device_for_thread.raw(), baud);
-                if (stop.load(std::memory_order_acquire)) {
-                    return;
-                }
-                if (!opened) {
-                    Glib::signal_idle().connect_once(sigc::track_object([this, use_tcp] {
-                        finish_connect_attempt_ui(false, describe_connect_open_failure_ui(use_tcp), true);
-                    }, *this));
-                    return;
-                }
-
-                auto const probe =
-                    use_tcp ? Inkscape::Axidraw::probe_open_grbl(*tcp) : Inkscape::Axidraw::probe_open_grbl(*port);
-                if (stop.load(std::memory_order_acquire)) {
-                    return;
-                }
-                if (!probe.ok) {
-                    Glib::signal_idle().connect_once(
-                        sigc::track_object([this, probe, baud, dev = Glib::ustring(device_for_thread)] {
-                            auto const status = dev.rfind("tcp://", 0) == 0
-                                ? describe_tcp_probe_failure_ui(dev, probe)
-                                : describe_probe_failure_ui(dev, baud, probe);
-                            finish_connect_attempt_ui(false, status, true, true);
-                        }, *this));
-                    return;
-                }
-
-                std::lock_guard guard(_port_mutex);
-                if (stop.load(std::memory_order_acquire)) {
-                    return;
-                }
-                if (use_tcp) {
-                    _link->set_tcp(std::move(tcp));
-                } else {
-                    _link->set_serial(std::move(port));
-                }
-                Glib::signal_idle().connect_once(
-                    sigc::track_object([this, dev = Glib::ustring(device_for_thread), probe] {
-                        finalize_successful_connection_ui(dev, probe);
-                    }, *this));
-            }, _("当前面板正在关闭，无法启动连接。"))) {
-        set_connecting_state(false);
-        _btn_connect.set_active(false);
-    }
+    start_connect_worker(std::move(request));
 }
 
 double GrblControlPanel::jog_distance_mm() const
