@@ -45,6 +45,7 @@ namespace Inkscape::UI::Dialog {
 
 class GrblPanelWorkers;
 class GrblPanelSender;
+class GrblPanelFirmwareSync;
 
 class GrblControlPanel final : public DialogBase
 {
@@ -54,6 +55,7 @@ public:
 
 private:
     friend class GrblPanelSender;
+    friend class GrblPanelFirmwareSync;
 
     enum class RuntimePhase {
         idle,
