@@ -1730,8 +1730,20 @@ bool GrblControlPanel::on_machine_status_poll_timeout()
         phase == RuntimePhase::firmware_sync) {
         return true;
     }
+    if (!_workers) {
+        return false;
+    }
+
+    bool expected = false;
+    if (!_machine_status_poll_in_flight.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        // Previous poll still running; keep timer, skip this tick.
+        return true;
+    }
 
     if (!_workers || !_workers->start([this](GrblPanelWorkers::StopFlag const &stop) {
+            scope_exit const clear_in_flight{[this] {
+                _machine_status_poll_in_flight.store(false, std::memory_order_release);
+            }};
             if (stop.load(std::memory_order_acquire)) {
                 return;
             }
@@ -1758,6 +1770,7 @@ bool GrblControlPanel::on_machine_status_poll_timeout()
                 post_machine_status(Glib::ustring(line));
             }
         })) {
+        _machine_status_poll_in_flight.store(false, std::memory_order_release);
         return false;
     }
 

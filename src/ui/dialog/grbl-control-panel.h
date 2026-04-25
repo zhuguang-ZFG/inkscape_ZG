@@ -170,6 +170,9 @@ private:
     std::atomic<bool> _gcode_cancel{false};
     std::atomic<bool> _firmware_syncing{false};
 
+    /// True while a background poll for '?'/status is running (at most one at a time).
+    std::atomic<bool> _machine_status_poll_in_flight{false};
+
     sigc::connection _machine_status_poll;
     sigc::connection _plot_feedback_refresh_timer;
     bool _suspend_port_combo{false};
