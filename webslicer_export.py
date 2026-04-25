@@ -70,7 +70,9 @@ class Export(WebSlicerMixin, inkex.OutputExtension):
 
     def get_cmd_output(self, cmd):
         try:
-            pipe = subprocess.Popen(cmd)
+            pipe = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, universal_newlines=True
+            )
         except FileNotFoundError:
             return 1, ""
         stdout, _ = pipe.communicate()
@@ -300,7 +302,7 @@ class Export(WebSlicerMixin, inkex.OutputExtension):
                 self.reg_css(css_selector, "left", str(geo["x"]) + "px")
                 self.reg_css(css_selector, "top", str(geo["y"]) + "px")
             if conf["layout-disposition"] == "img-float-left":
-                self.reg_css(css_selector, "float", "right")
+                self.reg_css(css_selector, "float", "left")
             if conf["layout-disposition"] == "img-float-right":
                 self.reg_css(css_selector, "float", "right")
 

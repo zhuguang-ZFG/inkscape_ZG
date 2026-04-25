@@ -84,7 +84,7 @@ def is_3dbox(element):
 def is_text_on_path(element):
     """Check whether text element is put on a path."""
     if isinstance(element, TextElement):
-        text_path = element.find("svg:textPath")
+        text_path = element.find(inkex.addNS("textPath", "svg"))
         if text_path is not None and len(text_path):
             return True
     return False
@@ -117,7 +117,12 @@ def check_3dbox(svg, element, scale_x, scale_y):
 def check_text_on_path(svg, element, scale_x, scale_y):
     """Check whether to skip scaling a text put on a path."""
     skip = False
-    path = element.find("textPath").href
+    text_path = element.find(inkex.addNS("textPath", "svg"))
+    if text_path is None:
+        text_path = element.find("textPath")
+    if text_path is None:
+        return skip
+    path = text_path.href
     if not is_in_defs(svg, path):
         if is_sibling(element, path):
             # skip common element scaling if both text and path are siblings
@@ -137,7 +142,7 @@ def check_text_on_path(svg, element, scale_x, scale_y):
                 element.set("style", str(inkex.Style(sdict)))
             # inner tspans
             for child in element.iterdescendants():
-                if isinstance(element, inkex.Tspan):
+                if isinstance(child, inkex.Tspan):
                     sdict = dict(inkex.Style.parse_str(child.get("style")))
                     if prop in sdict:
                         sdict[prop] = float(sdict[prop]) * descrim
