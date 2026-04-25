@@ -224,6 +224,7 @@ private:
     std::atomic<bool> _machine_status_poll_in_flight{false};
 
     sigc::connection _machine_status_poll;
+    sigc::connection _delayed_firmware_sync;
     sigc::connection _plot_feedback_refresh_timer;
     bool _suspend_port_combo{false};
     bool _suspend_mapping_sync{false};

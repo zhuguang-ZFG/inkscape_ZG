@@ -10,10 +10,15 @@
 
 #include <chrono>
 #include <cctype>
+#include <ctime>
+#include <fstream>
 #include <functional>
+#include <iomanip>
+#include <mutex>
 #include <thread>
 
 #include <glibmm/i18n.h>
+#include <glibmm/miscutils.h>
 #include <glibmm/ustring.h>
 
 namespace Inkscape::Axidraw {
@@ -27,6 +32,7 @@ struct GrblWaitContext {
 };
 
 thread_local GrblWaitContext s_wait_context;
+std::mutex g_grbl_debug_log_mutex;
 
 bool starts_with_ascii_case_insensitive(std::string_view haystack, std::string_view needle)
 {
@@ -47,6 +53,34 @@ bool starts_with_ascii_case_insensitive(std::string_view haystack, std::string_v
 }
 
 } // namespace
+
+void grbl_debug_log_write(char const *source, std::string_view payload)
+{
+    std::lock_guard const lock(g_grbl_debug_log_mutex);
+    auto const path = Glib::build_filename(Glib::get_current_dir(), "grbl-host-write.log");
+    std::ofstream out(path, std::ios::app | std::ios::binary);
+    if (!out) {
+        return;
+    }
+
+    auto const now = std::chrono::system_clock::now();
+    auto const ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    auto const tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+
+    char timestamp[32];
+    std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm);
+    out << timestamp << '.';
+    out << std::setw(3) << std::setfill('0') << ms.count();
+    out << " [" << (source ? source : "?") << "] ";
+    out.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    out << '\n';
+}
 
 void grbl_begin_plot_waits(std::function<void()> pump, std::atomic<bool> const *cancel_flag)
 {
@@ -156,7 +190,9 @@ static void grbl_wake_port(PortT &port)
     port.purge_io();
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
+    grbl_debug_log_write("grbl_wake_port", "\\r\\n");
     port.write_line("");
+    grbl_debug_log_write("grbl_wake_port", "\\r\\n");
     port.write_line("");
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
@@ -230,6 +266,7 @@ static GrblProbeResult probe_open_grbl_impl(PortT &port)
     grbl_wake_port(port);
 
     char const q = '?';
+    grbl_debug_log_write("probe_open_grbl", "?");
     if ((port.write_bytes(&q, 1) || port.write_line("?")) && read_probe_lines(8, 700)) {
         return r;
     }
@@ -237,6 +274,7 @@ static GrblProbeResult probe_open_grbl_impl(PortT &port)
     // Some Bluetooth GRBL variants respond much more reliably to a soft reset
     // banner than to the initial status poll right after opening the SPP link.
     char const ctrl_x = 0x18;
+    grbl_debug_log_write("probe_open_grbl", "\\x18");
     if (!port.write_bytes(&ctrl_x, 1)) {
         return r;
     }
@@ -247,6 +285,7 @@ static GrblProbeResult probe_open_grbl_impl(PortT &port)
 
     // One last try after the reset banner / wakeup dance.
     grbl_wake_port(port);
+    grbl_debug_log_write("probe_open_grbl", "?");
     if ((port.write_bytes(&q, 1) || port.write_line("?")) && read_probe_lines(8, 800)) {
         return r;
     }
@@ -277,6 +316,7 @@ static bool grbl_send_line_impl(PortT &port, std::string const &line, std::strin
         return false;
     }
     grbl_progress_tick();
+    grbl_debug_log_write("grbl_send_line", line);
     if (!port.write_line(line)) {
         err_out = "serial write failed";
         return false;

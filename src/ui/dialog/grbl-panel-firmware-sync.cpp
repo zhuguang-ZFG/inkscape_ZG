@@ -125,7 +125,9 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         link->purge_io();
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
+        Inkscape::Axidraw::grbl_debug_log_write("firmware_sync", "\\r\\n");
         link->write_line("");
+        Inkscape::Axidraw::grbl_debug_log_write("firmware_sync", "\\r\\n");
         link->write_line("");
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
@@ -151,6 +153,7 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         }
 
         bool const sent = link->write_line(command);
+        Inkscape::Axidraw::grbl_debug_log_write("firmware_sync", command);
         if (!sent) {
             err_out = "serial write failed";
             return false;
@@ -223,6 +226,7 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
                 // Some Bluetooth GRBL variants only respond reliably after a soft reset,
                 // and then expose all useful metadata via `$$` and bracketed info lines.
                 char const ctrl_x = 0x18;
+                Inkscape::Axidraw::grbl_debug_log_write("firmware_sync", "\\x18");
                 if (link->write_bytes(&ctrl_x, 1)) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 

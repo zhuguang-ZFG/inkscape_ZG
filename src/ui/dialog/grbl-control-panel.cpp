@@ -150,15 +150,18 @@ Glib::ustring format_duration_compact(double seconds)
     long long const hours = rounded / 3600;
     long long const minutes = (rounded % 3600) / 60;
     long long const secs = rounded % 60;
-    std::ostringstream out;
+    Glib::ustring out;
     if (hours > 0) {
-        out << hours << _("小时");
+        out += std::to_string(hours);
+        out += "小时";
     }
     if (minutes > 0 || hours > 0) {
-        out << minutes << _("分");
+        out += std::to_string(minutes);
+        out += "分";
     }
-    out << secs << _("秒");
-    return out.str();
+    out += std::to_string(secs);
+    out += "秒";
+    return out;
 }
 
 void trim_in_place(std::string &s)
@@ -1190,6 +1193,7 @@ void GrblControlPanel::begin_connect_attempt_ui(Glib::ustring const &status)
 {
     set_connecting_state(true);
     ensure_machine_status_poll(false);
+    _delayed_firmware_sync.disconnect();
     post_status(status, false);
 }
 
@@ -1483,6 +1487,7 @@ void GrblControlPanel::disconnect_controller(bool const announce_status)
 {
     set_connecting_state(false);
     ensure_machine_status_poll(false);
+    _delayed_firmware_sync.disconnect();
     {
         std::lock_guard const lk(_port_mutex);
         if (_link && _link->is_open()) {
@@ -1552,10 +1557,17 @@ void GrblControlPanel::finalize_successful_connection_ui(Glib::ustring const &de
     ensure_machine_status_poll(true);
     on_read_firmware_settings();
     schedule_plot_feedback_refresh(false);
-    Glib::signal_timeout().connect_once(sigc::track_object([this] {
-        if (_btn_connect.get_active() && get_runtime_phase() != RuntimePhase::connecting) {
+    _delayed_firmware_sync.disconnect();
+    _delayed_firmware_sync = Glib::signal_timeout().connect(sigc::track_object([this] {
+        auto const phase = get_runtime_phase();
+        if (_btn_connect.get_active() &&
+            phase != RuntimePhase::connecting &&
+            phase != RuntimePhase::gcode_sending &&
+            phase != RuntimePhase::gcode_cancelling) {
             on_read_firmware_settings();
         }
+        _delayed_firmware_sync.disconnect();
+        return false;
     }, *this), 1200);
 }
 
@@ -1986,6 +1998,7 @@ bool GrblControlPanel::on_machine_status_poll_timeout()
                 return;
             }
             char const q = '?';
+            Inkscape::Axidraw::grbl_debug_log_write("machine_status_poll", "?");
             if (!_link->write_bytes(&q, 1)) {
                 return;
             }
@@ -2179,6 +2192,10 @@ void GrblControlPanel::run_action(std::function<void(std::string &)> work, bool 
 
 void GrblControlPanel::on_read_firmware_settings()
 {
+    auto const phase = get_runtime_phase();
+    if (phase == RuntimePhase::gcode_sending || phase == RuntimePhase::gcode_cancelling) {
+        return;
+    }
     if (!begin_firmware_sync()) {
         return;
     }
@@ -2448,6 +2465,12 @@ void GrblControlPanel::set_gcode_stream_ui_active(bool const active)
 {
     bool const sending_changed = _gcode_sending.exchange(active, std::memory_order_acq_rel) != active;
     bool const cancel_changed = _gcode_cancel.exchange(false, std::memory_order_acq_rel);
+    if (active) {
+        ensure_machine_status_poll(false);
+        _delayed_firmware_sync.disconnect();
+    } else if (_btn_connect.get_active() && !_firmware_syncing.load(std::memory_order_acquire)) {
+        ensure_machine_status_poll(true);
+    }
     if (sending_changed || cancel_changed) {
         refresh_runtime_ui_state();
     }

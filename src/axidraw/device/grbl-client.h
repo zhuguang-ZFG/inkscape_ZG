@@ -13,6 +13,8 @@
 
 namespace Inkscape::Axidraw {
 
+void grbl_debug_log_write(char const *source, std::string_view payload);
+
 class SerialPort;
 class TcpPort;
 
