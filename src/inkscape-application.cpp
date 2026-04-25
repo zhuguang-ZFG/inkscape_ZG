@@ -38,6 +38,7 @@
 #include "inkscape-application.h"
 
 #include <iostream>
+#include <fstream>
 #include <cerrno>  // History file
 #include <regex>
 #include <numeric>
@@ -773,7 +774,6 @@ SPDesktop *InkscapeApplication::createDesktop(SPDocument *document, bool replace
 */
 void InkscapeApplication::create_window(Glib::RefPtr<Gio::File> const &file)
 {
-    startup_trace(std::string("create_window: begin file=") + (file ? file->get_parse_name().raw() : "<new>"));
     if (!gtk_app()) {
         g_assert_not_reached();
         return;
@@ -808,16 +808,13 @@ void InkscapeApplication::create_window(Glib::RefPtr<Gio::File> const &file)
         document = document_new();
         if (document) {
             desktop = desktopOpen(document);
-            startup_trace("create_window: desktopOpen(new document) returned");
         } else {
-            startup_trace("create_window: document_new failed");
             std::cerr << "InkscapeApplication::create_window: Failed to open default document!" << std::endl;
         }
     }
 
     _active_document = document;
     _active_window = desktop ? desktop->getInkscapeWindow() : nullptr;
-    startup_trace(std::string("create_window: end active_window=") + (_active_window ? "yes" : "no"));
 }
 
 /** Destroy a window and close the document it contains. Aborts if document needs saving.
@@ -910,7 +907,6 @@ bool InkscapeApplication::destroy_all()
  */
 void InkscapeApplication::process_document(SPDocument *document, std::string output_path, bool new_window)
 {
-    startup_trace("process_document: begin");
     // Are we doing one file at a time? In that case, we don't recreate new windows for each file.
     bool replace = _use_pipe || _batch_process;
 
@@ -918,7 +914,6 @@ void InkscapeApplication::process_document(SPDocument *document, std::string out
     _active_document  = document;
     if (_with_gui) {
         _active_desktop = createDesktop(document, replace, new_window);
-        startup_trace(std::string("process_document: createDesktop returned ") + (_active_desktop ? "desktop" : "null"));
         _active_window = _active_desktop->getInkscapeWindow();
     } else {
         _active_window = nullptr;
@@ -935,7 +930,6 @@ void InkscapeApplication::process_document(SPDocument *document, std::string out
         shell();
     }
     if (_with_gui && _active_window) {
-        startup_trace("process_document: document_fix");
         document_fix(_active_desktop);
     }
     // Only if --export-filename, --export-type --export-overwrite, or --export-use-hints are used.
@@ -943,7 +937,6 @@ void InkscapeApplication::process_document(SPDocument *document, std::string out
         // Save... can't use action yet.
         _file_export.do_export(document, output_path);
     }
-    startup_trace("process_document: end");
 }
 
 /*
@@ -952,7 +945,6 @@ void InkscapeApplication::process_document(SPDocument *document, std::string out
  */
 void InkscapeApplication::on_startup()
 {
-    startup_trace("on_startup: begin");
     // Autosave
     Inkscape::AutoSave::getInstance().init(this);
 
@@ -961,26 +953,18 @@ void InkscapeApplication::on_startup()
 
     // Extensions
     if (_no_extensions) {
-        startup_trace("on_startup: shallow extension init");
         Inkscape::Extension::shallow_init();
     } else {
-        startup_trace("on_startup: full extension init begin");
         Inkscape::Extension::init();
-        startup_trace("on_startup: full extension init end");
     }
 
     // After extensions are loaded query effects to construct action data
-    startup_trace("on_startup: init_extension_action_data begin");
     init_extension_action_data();
-    startup_trace("on_startup: init_extension_action_data end");
 
     // Command line execution. Must be after Extensions are initialized.
-    startup_trace("on_startup: parse_actions begin");
     parse_actions(_command_line_actions_input, _command_line_actions);
-    startup_trace("on_startup: parse_actions end");
 
     if (!_with_gui) {
-        startup_trace("on_startup: no gui return");
         return;
     }
 
@@ -999,13 +983,11 @@ void InkscapeApplication::on_startup()
 
     // Add tool based shortcut meta-data
     init_tool_shortcuts(this);
-    startup_trace("on_startup: end");
 }
 
 // Open document window with default document or pipe. Either this or on_open() is called.
 void InkscapeApplication::on_activate()
 {
-    startup_trace("on_activate: begin");
     std::string output;
     // Create new document, either from pipe or from template.
     SPDocument *document = nullptr;
@@ -1018,37 +1000,29 @@ void InkscapeApplication::on_activate()
         output = "-";
     } else if (_with_gui)  {
         if (gtk_app()->get_windows().empty() && Inkscape::UI::Dialog::StartScreen::get_start_mode() > 0) {
-            startup_trace("on_activate: opening start screen");
             _openStartScreen();
             return;
         }
         _closeStartScreen();
-        startup_trace("on_activate: before document_new");
         document = document_new();
-        startup_trace(std::string("on_activate: document_new returned ") + (document ? "document" : "null"));
     } else if (_use_command_line_argument) {
         document = document_new();
     } else {
-        startup_trace("on_activate: failed to create document path");
         std::cerr << "InkscapeApplication::on_activate: failed to create document!" << std::endl;
         return;
     }
 
     if (!document) {
-        startup_trace("on_activate: document null return");
         return;
     }
 
     // Process document (command line actions, shell, create window)
-    startup_trace("on_activate: before process_document");
     process_document(document, output, true);
-    startup_trace("on_activate: after process_document");
 
     if (_batch_process) {
         // If with_gui, we've reused a window for each file. We must quit to destroy it.
         gio_app()->quit();
     }
-    startup_trace("on_activate: end");
 }
 
 void InkscapeApplication::windowClose(InkscapeWindow *window)
@@ -2017,20 +1991,15 @@ void InkscapeApplication::init_extension_action_data() {
 void InkscapeApplication::_openStartScreen()
 {
     assert(_with_gui);
-    startup_trace("_openStartScreen: begin");
     auto win = Gtk::make_managed<Inkscape::UI::Dialog::StartScreen>();
-    startup_trace("_openStartScreen: StartScreen constructed");
     gtk_app()->add_window(*win);
-    startup_trace("_openStartScreen: window added");
     win->present();
-    startup_trace("_openStartScreen: window presented");
     win->connectOpen([this] (SPDocument *document) { // this outlives win
         if (!document) {
             document = document_new();
         }
         process_document(document, {});
     });
-    startup_trace("_openStartScreen: connectOpen wired");
 }
 
 /// Close the start screen, if open.
