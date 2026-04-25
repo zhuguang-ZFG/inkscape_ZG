@@ -1170,6 +1170,13 @@ bool GrblControlPanel::set_runtime_flag(std::atomic<bool> &flag, bool const acti
     return true;
 }
 
+void GrblControlPanel::begin_connect_attempt_ui(Glib::ustring const &status)
+{
+    set_connecting_state(true);
+    ensure_machine_status_poll(false);
+    post_status(status, false);
+}
+
 void GrblControlPanel::set_connecting_state(bool const active)
 {
     set_runtime_flag(_connecting, active);
@@ -1187,6 +1194,18 @@ bool GrblControlPanel::begin_firmware_sync()
     }
     ensure_machine_status_poll(false);
     return true;
+}
+
+void GrblControlPanel::complete_firmware_sync_ui(bool const resume_machine_status_poll,
+                                                 bool const refresh_plot_feedback)
+{
+    set_firmware_syncing_state(false);
+    if (resume_machine_status_poll && is_connect_active()) {
+        ensure_machine_status_poll(true);
+    }
+    if (refresh_plot_feedback) {
+        schedule_plot_feedback_refresh(false);
+    }
 }
 
 SPPage *GrblControlPanel::get_target_page(SPDocument *doc) const
@@ -2048,11 +2067,7 @@ void GrblControlPanel::on_read_firmware_settings()
             },
             .finish_sync_ui = [this] {
                 Glib::signal_idle().connect_once(sigc::track_object([this] {
-                    set_firmware_syncing_state(false);
-                    if (is_connect_active()) {
-                        ensure_machine_status_poll(true);
-                    }
-                    schedule_plot_feedback_refresh(false);
+                    complete_firmware_sync_ui(true, true);
                 }, *this));
             },
             .apply_snapshot_to_ui = [this](GrblFirmwareSnapshot const &snapshot) {
@@ -2065,7 +2080,7 @@ void GrblControlPanel::on_read_firmware_settings()
         };
         GrblPanelFirmwareSync::run(context, stop);
     }, _("当前面板正在关闭，无法同步固件参数。"))) {
-        set_firmware_syncing_state(false);
+        complete_firmware_sync_ui(true, false);
     }
 }
 
@@ -2110,8 +2125,7 @@ void GrblControlPanel::connect_toggle()
         }
     }
     bool const use_tcp = !tcp_host.empty() && tcp_port > 0;
-    set_connecting_state(true);
-    post_status(make_connect_probe_status(device_for_thread, baud, use_tcp), false);
+    begin_connect_attempt_ui(make_connect_probe_status(device_for_thread, baud, use_tcp));
 
     // Run open/probe on a worker to avoid blocking UI if driver stalls.
     if (!start_short_worker(
@@ -2407,32 +2421,44 @@ bool GrblControlPanel::set_gcode_cancel_requested(bool const active)
     return true;
 }
 
+void GrblControlPanel::complete_gcode_stream_ui(bool const join_worker_thread)
+{
+    if (join_worker_thread) {
+        join_gcode_stream_thread();
+    }
+    set_gcode_stream_ui_active(false);
+    schedule_plot_feedback_refresh(false);
+}
+
 void GrblControlPanel::finish_gcode_stream_ui()
 {
     Glib::signal_idle().connect_once(sigc::track_object([this] {
-        set_gcode_stream_ui_active(false);
-        schedule_plot_feedback_refresh(false);
+        complete_gcode_stream_ui(false);
     }, *this));
 }
 
 void GrblControlPanel::finish_gcode_stream_from_worker()
 {
     Glib::signal_idle().connect_once(sigc::track_object([this] {
-        join_gcode_stream_thread();
-        set_gcode_stream_ui_active(false);
-        schedule_plot_feedback_refresh(false);
+        complete_gcode_stream_ui(true);
     }, *this));
+}
+
+bool GrblControlPanel::request_gcode_cancel_ui()
+{
+    if (!get_runtime_state_view().gcode_active) {
+        return false;
+    }
+    if (!set_gcode_cancel_requested(true)) {
+        return false;
+    }
+    post_status(_("正在请求停止发送..."), false);
+    return true;
 }
 
 void GrblControlPanel::on_cancel_gcode_stream()
 {
-    if (!get_runtime_state_view().gcode_active) {
-        return;
-    }
-    if (!set_gcode_cancel_requested(true)) {
-        return;
-    }
-    post_status(_("正在请求停止发送..."), false);
+    request_gcode_cancel_ui();
 }
 
 void GrblControlPanel::clear_plot_preview_overlay()

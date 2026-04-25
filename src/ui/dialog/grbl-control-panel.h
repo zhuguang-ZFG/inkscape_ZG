@@ -115,10 +115,13 @@ private:
     RuntimeStateView get_runtime_state_view() const;
     void refresh_runtime_ui_state();
     bool set_runtime_flag(std::atomic<bool> &flag, bool active);
+    void begin_connect_attempt_ui(Glib::ustring const &status);
     bool begin_firmware_sync();
+    void complete_firmware_sync_ui(bool resume_machine_status_poll, bool refresh_plot_feedback);
     void finish_gcode_stream_ui();
     /// Rejoins the G-code stream worker on the main loop, then mirrors @ref finish_gcode_stream_ui.
     void finish_gcode_stream_from_worker();
+    void complete_gcode_stream_ui(bool join_worker_thread);
     void set_controls_sensitive_for_gcode_stream(bool allow);
     void update_action_button_labels(RuntimeStateView const &state);
     void update_connection_controls(RuntimeStateView const &state);
@@ -192,6 +195,7 @@ private:
     void start_gcode_stream_thread(std::function<void()> work);
     void run_gcode_stream_thread(std::function<void(std::unique_lock<std::mutex> &)> work);
     void finish_gcode_stream_worker(std::unique_lock<std::mutex> &port_lock);
+    bool request_gcode_cancel_ui();
     void with_grbl_plot_waits(std::function<void()> work);
     std::unique_ptr<GrblPanelWorkers> _workers;
     std::unique_ptr<Inkscape::Axidraw::GrblLink> _link;
