@@ -1059,38 +1059,44 @@ void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_inter
 
 GrblControlPanel::RuntimePhase GrblControlPanel::get_runtime_phase() const
 {
-    if (_gcode_sending.load(std::memory_order_acquire)) {
-        if (_gcode_cancel.load(std::memory_order_acquire)) {
-            return RuntimePhase::gcode_cancelling;
-        }
-        return RuntimePhase::gcode_sending;
+    return get_runtime_state_view().phase;
+}
+
+GrblControlPanel::RuntimeStateView GrblControlPanel::get_runtime_state_view() const
+{
+    RuntimeStateView state;
+    state.connecting = _connecting.load(std::memory_order_acquire);
+    state.firmware_sync = _firmware_syncing.load(std::memory_order_acquire);
+    state.gcode_active = _gcode_sending.load(std::memory_order_acquire);
+    state.cancel_requested = state.gcode_active && _gcode_cancel.load(std::memory_order_acquire);
+
+    if (state.gcode_active) {
+        state.phase = state.cancel_requested ? RuntimePhase::gcode_cancelling : RuntimePhase::gcode_sending;
+    } else if (state.connecting) {
+        state.phase = RuntimePhase::connecting;
+    } else if (state.firmware_sync) {
+        state.phase = RuntimePhase::firmware_sync;
+    } else {
+        state.phase = RuntimePhase::idle;
     }
-    if (_connecting.load(std::memory_order_acquire)) {
-        return RuntimePhase::connecting;
-    }
-    if (_firmware_syncing.load(std::memory_order_acquire)) {
-        return RuntimePhase::firmware_sync;
-    }
-    return RuntimePhase::idle;
+    state.busy = state.phase != RuntimePhase::idle;
+    return state;
 }
 
 bool GrblControlPanel::has_active_gcode_stream() const
 {
-    auto const phase = get_runtime_phase();
-    return phase == RuntimePhase::gcode_sending || phase == RuntimePhase::gcode_cancelling;
+    return get_runtime_state_view().gcode_active;
 }
 
 bool GrblControlPanel::is_runtime_busy() const
 {
-    return get_runtime_phase() != RuntimePhase::idle;
+    return get_runtime_state_view().busy;
 }
 
 void GrblControlPanel::refresh_runtime_ui_state()
 {
-    auto const phase = get_runtime_phase();
-    bool const sending = has_active_gcode_stream();
-    bool const cancel_requested = phase == RuntimePhase::gcode_cancelling;
-    bool const allow_interaction = !is_runtime_busy();
+    auto const state = get_runtime_state_view();
+    bool const allow_interaction = !state.busy;
 
     _btn_connect.set_sensitive(allow_interaction);
     _btn_read_firmware.set_sensitive(allow_interaction);
@@ -1112,8 +1118,8 @@ void GrblControlPanel::refresh_runtime_ui_state()
     _end_gcode_view.set_sensitive(allow_interaction);
     _gcode_view.set_sensitive(allow_interaction);
     _btn_send_gcode.set_sensitive(allow_interaction);
-    _btn_cancel_gcode.set_sensitive(sending && !cancel_requested);
-    _btn_cancel_gcode.set_label(cancel_requested ? _("停止请求中...") : _("取消发送(_C)"));
+    _btn_cancel_gcode.set_sensitive(state.gcode_active && !state.cancel_requested);
+    _btn_cancel_gcode.set_label(state.cancel_requested ? _("停止请求中...") : _("取消发送(_C)"));
     for (auto *b : {&_btn_mech_home, &_btn_yp, &_btn_set_origin, &_btn_xm, &_btn_goto_work_zero, &_btn_xp, &_btn_reset, &_btn_ym,
                     &_btn_pen_up, &_btn_pen_down, &_btn_motors, &_btn_clear_alarm, &_btn_fit_to_bed, &_btn_center_to_bed,
                     &_btn_restore_page_size}) {
@@ -1121,20 +1127,18 @@ void GrblControlPanel::refresh_runtime_ui_state()
     }
     _jog_dist.set_sensitive(allow_interaction);
     update_page_restore_button();
-    update_action_button_labels();
-    update_connection_controls();
+    update_action_button_labels(state);
+    update_connection_controls(state);
 }
 
-void GrblControlPanel::update_action_button_labels()
+void GrblControlPanel::update_action_button_labels(RuntimeStateView const &state)
 {
-    auto const phase = get_runtime_phase();
-    bool const sending = phase == RuntimePhase::gcode_sending;
-    bool const cancelling = phase == RuntimePhase::gcode_cancelling;
-    bool const firmware_sync = phase == RuntimePhase::firmware_sync;
+    bool const sending = state.phase == RuntimePhase::gcode_sending;
+    bool const cancelling = state.phase == RuntimePhase::gcode_cancelling;
 
     _btn_send_gcode.set_label(sending || cancelling ? _("发送中...") : _("发送到机器(_S)"));
     _btn_send_from_drawing.set_label(sending || cancelling ? _("图稿发送中...") : _("从图稿直接发送"));
-    _btn_read_firmware.set_label(firmware_sync ? _("同步中...") : _("同步绘图机参数"));
+    _btn_read_firmware.set_label(state.firmware_sync ? _("同步中...") : _("同步绘图机参数"));
 
     if (sending || cancelling) {
         _btn_send_gcode.set_tooltip_text(_("当前正在发送编辑器中的 G-code；如需停止，请使用旁边的“取消发送”。"));
@@ -1148,7 +1152,7 @@ void GrblControlPanel::update_action_button_labels()
             _("按当前绘图机首选项直接从当前文档生成 G-code，并立刻发送到已连接的绘图机。"));
     }
 
-    if (firmware_sync) {
+    if (state.firmware_sync) {
         _btn_read_firmware.set_tooltip_text(_("正在读取 $I、$G、$#、$$ 并同步方向掩码、床面尺寸等信息。"));
     } else {
         _btn_read_firmware.set_tooltip_text(
@@ -1156,25 +1160,31 @@ void GrblControlPanel::update_action_button_labels()
     }
 }
 
+bool GrblControlPanel::set_runtime_flag(std::atomic<bool> &flag, bool const active)
+{
+    bool const previous = flag.exchange(active, std::memory_order_acq_rel);
+    if (previous == active) {
+        return false;
+    }
+    refresh_runtime_ui_state();
+    return true;
+}
+
 void GrblControlPanel::set_connecting_state(bool const active)
 {
-    _connecting.store(active, std::memory_order_release);
-    refresh_runtime_ui_state();
+    set_runtime_flag(_connecting, active);
 }
 
 void GrblControlPanel::set_firmware_syncing_state(bool const active)
 {
-    _firmware_syncing.store(active, std::memory_order_release);
-    refresh_runtime_ui_state();
+    set_runtime_flag(_firmware_syncing, active);
 }
 
 bool GrblControlPanel::begin_firmware_sync()
 {
-    bool const already_syncing = _firmware_syncing.exchange(true, std::memory_order_acq_rel);
-    if (already_syncing) {
+    if (!set_runtime_flag(_firmware_syncing, true)) {
         return false;
     }
-    refresh_runtime_ui_state();
     ensure_machine_status_poll(false);
     return true;
 }
@@ -1383,6 +1393,50 @@ bool GrblControlPanel::should_sync_page_to_bed_on_firmware_read() const
     return _chk_sync_page_to_bed.get_active();
 }
 
+GrblFirmwareSyncApplyResult GrblControlPanel::apply_firmware_snapshot_to_ui(GrblFirmwareSnapshot const &snapshot)
+{
+    auto update_check_if_needed = [](Gtk::CheckButton &button, bool const value) {
+        if (button.get_active() == value) {
+            return false;
+        }
+        button.set_active(value);
+        return true;
+    };
+    auto update_spin_if_needed = [](Gtk::SpinButton &spin, double const value, double const epsilon = 1e-6) {
+        if (std::abs(spin.get_value() - value) <= epsilon) {
+            return false;
+        }
+        spin.set_value(value);
+        return true;
+    };
+
+    GrblFirmwareSyncApplyResult result;
+    set_mapping_sync_suspended(true);
+    if (snapshot.has_direction_mask) {
+        result.changed = update_check_if_needed(_chk_invert_x, (snapshot.direction_mask & 0x1) != 0) || result.changed;
+        result.changed = update_check_if_needed(_chk_invert_y, (snapshot.direction_mask & 0x2) != 0) || result.changed;
+    }
+    if (snapshot.has_x_travel) {
+        result.changed = update_spin_if_needed(_bed_width_spin, snapshot.x_travel_mm) || result.changed;
+    }
+    if (snapshot.has_y_travel) {
+        result.changed = update_spin_if_needed(_bed_depth_spin, snapshot.y_travel_mm) || result.changed;
+    }
+    set_mapping_sync_suspended(false);
+
+    if (should_sync_page_to_bed_on_firmware_read() && snapshot.has_x_travel && snapshot.has_y_travel) {
+        if (auto *doc = getDocument()) {
+            result.page_synced = sync_document_page_to_bed_mm(doc, snapshot.x_travel_mm,
+                                                              snapshot.y_travel_mm, result.unit_synced);
+            if (result.page_synced) {
+                finalize_document_geometry_change(doc, DocumentGeometryChange::sync_page_to_bed);
+            }
+        }
+    }
+
+    return result;
+}
+
 void GrblControlPanel::post_machine_status(Glib::ustring const &text)
 {
     Glib::signal_idle().connect_once(sigc::track_object([this, text] {
@@ -1490,12 +1544,12 @@ Glib::ustring GrblControlPanel::get_busy_reason_for_phase(RuntimePhase const pha
 bool GrblControlPanel::get_busy_reason(bool const block_connecting, bool const block_firmware_sync,
                                        bool const block_gcode_sending, Glib::ustring &reason) const
 {
-    auto const phase = get_runtime_phase();
-    bool const blocked = (block_connecting && phase == RuntimePhase::connecting) ||
-                         (block_firmware_sync && phase == RuntimePhase::firmware_sync) ||
-                         (block_gcode_sending && has_active_gcode_stream());
+    auto const state = get_runtime_state_view();
+    bool const blocked = (block_connecting && state.connecting) ||
+                         (block_firmware_sync && state.firmware_sync) ||
+                         (block_gcode_sending && state.gcode_active);
     if (blocked) {
-        reason = get_busy_reason_for_phase(phase, BusyReasonContext::generic);
+        reason = get_busy_reason_for_phase(state.phase, BusyReasonContext::generic);
         return true;
     }
     return false;
@@ -1508,9 +1562,9 @@ bool GrblControlPanel::is_machine_command_blocked(Glib::ustring &reason) const
 
 bool GrblControlPanel::is_export_operation_blocked(Glib::ustring &reason) const
 {
-    auto const phase = get_runtime_phase();
-    if (phase != RuntimePhase::idle) {
-        reason = get_busy_reason_for_phase(phase, BusyReasonContext::export_action);
+    auto const state = get_runtime_state_view();
+    if (state.busy) {
+        reason = get_busy_reason_for_phase(state.phase, BusyReasonContext::export_action);
         return true;
     }
     return false;
@@ -1603,7 +1657,7 @@ void GrblControlPanel::save_mapping_preferences_from_ui(bool const refresh_previ
     }
     prefs->save();
     update_tool_change_mode_ui();
-    bool const allow_interaction = !has_active_gcode_stream();
+    bool const allow_interaction = !get_runtime_state_view().gcode_active;
     update_mapping_control_sensitivity(allow_interaction);
     if (allow_interaction) {
         refresh_plot_feedback(refresh_preview);
@@ -1612,12 +1666,12 @@ void GrblControlPanel::save_mapping_preferences_from_ui(bool const refresh_previ
 
 void GrblControlPanel::update_tool_change_mode_ui()
 {
-    update_mapping_control_sensitivity(!has_active_gcode_stream());
+    update_mapping_control_sensitivity(!get_runtime_state_view().gcode_active);
 }
 
 bool GrblControlPanel::is_plot_feedback_blocked() const
 {
-    return get_runtime_phase() != RuntimePhase::idle;
+    return get_runtime_state_view().busy;
 }
 
 bool GrblControlPanel::require_active_plot_target(SPDocument *&doc, SPDesktop *&desktop, bool const clear_preview_on_failure)
@@ -1766,13 +1820,13 @@ void GrblControlPanel::refresh_plot_feedback(bool const refresh_preview)
 
 bool GrblControlPanel::begin_gcode_stream_ui(Glib::ustring const &status)
 {
-    auto const phase = get_runtime_phase();
-    if (phase == RuntimePhase::gcode_sending || phase == RuntimePhase::gcode_cancelling) {
+    auto const state = get_runtime_state_view();
+    if (state.gcode_active) {
         return false;
     }
     Glib::ustring blocked_reason;
     if (is_export_operation_blocked(blocked_reason)) {
-        blocked_reason = get_busy_reason_for_phase(phase, BusyReasonContext::send_action);
+        blocked_reason = get_busy_reason_for_phase(state.phase, BusyReasonContext::send_action);
         post_status(blocked_reason, true);
         return false;
     }
@@ -1857,9 +1911,8 @@ bool GrblControlPanel::on_machine_status_poll_timeout()
     if (!_btn_connect.get_active()) {
         return false;
     }
-    auto const phase = get_runtime_phase();
-    if (phase == RuntimePhase::gcode_sending || phase == RuntimePhase::gcode_cancelling ||
-        phase == RuntimePhase::firmware_sync) {
+    auto const state = get_runtime_state_view();
+    if (state.gcode_active || state.firmware_sync) {
         return true;
     }
     if (!_workers) {
@@ -1988,7 +2041,29 @@ void GrblControlPanel::on_read_firmware_settings()
         return;
     }
     if (!start_short_worker([this](GrblPanelWorkers::StopFlag const &stop) {
-        GrblPanelFirmwareSync::run(*this, stop);
+        GrblPanelFirmwareSyncContext context{
+            .link = _link.get(),
+            .with_locked_open_link = [this](std::atomic<bool> const &stop_flag, std::function<void()> work) {
+                return with_locked_open_link(stop_flag, std::move(work));
+            },
+            .finish_sync_ui = [this] {
+                Glib::signal_idle().connect_once(sigc::track_object([this] {
+                    set_firmware_syncing_state(false);
+                    if (is_connect_active()) {
+                        ensure_machine_status_poll(true);
+                    }
+                    schedule_plot_feedback_refresh(false);
+                }, *this));
+            },
+            .apply_snapshot_to_ui = [this](GrblFirmwareSnapshot const &snapshot) {
+                return apply_firmware_snapshot_to_ui(snapshot);
+            },
+            .set_firmware_info_text = [this](Glib::ustring const &text) { set_firmware_info_text(text); },
+            .save_mapping_preferences = [this](bool refresh_preview) { save_mapping_preferences_from_ui(refresh_preview); },
+            .schedule_plot_feedback_refresh = [this](bool refresh_preview) { schedule_plot_feedback_refresh(refresh_preview); },
+            .post_status = [this](Glib::ustring const &text, bool is_error) { post_status(text, is_error); },
+        };
+        GrblPanelFirmwareSync::run(context, stop);
     }, _("当前面板正在关闭，无法同步固件参数。"))) {
         set_firmware_syncing_state(false);
     }
@@ -2287,16 +2362,14 @@ void GrblControlPanel::on_restore_page_size()
     post_status(_("已恢复同步前的页面尺寸。"), false);
 }
 
-void GrblControlPanel::update_connection_controls()
+void GrblControlPanel::update_connection_controls(RuntimeStateView const &state)
 {
-    auto const phase = get_runtime_phase();
-    bool const connecting = phase == RuntimePhase::connecting;
-    bool const serial_controls = !is_runtime_busy();
+    bool const serial_controls = !state.busy;
 
     _port_combo.set_sensitive(serial_controls);
     _btn_refresh_ports.set_sensitive(serial_controls);
 
-    if (connecting) {
+    if (state.connecting) {
         _btn_connect.set_label(_("连接中..."));
         _btn_connect.set_tooltip_text(_("正在打开连接并探测控制器，请稍候。"));
     } else if (_btn_connect.get_active()) {
@@ -2317,9 +2390,11 @@ void GrblControlPanel::set_controls_sensitive_for_gcode_stream(bool const allow_
 
 void GrblControlPanel::set_gcode_stream_ui_active(bool const active)
 {
-    _gcode_sending.store(active, std::memory_order_release);
-    _gcode_cancel.store(false, std::memory_order_release);
-    refresh_runtime_ui_state();
+    bool const sending_changed = _gcode_sending.exchange(active, std::memory_order_acq_rel) != active;
+    bool const cancel_changed = _gcode_cancel.exchange(false, std::memory_order_acq_rel);
+    if (sending_changed || cancel_changed) {
+        refresh_runtime_ui_state();
+    }
 }
 
 bool GrblControlPanel::set_gcode_cancel_requested(bool const active)
@@ -2351,7 +2426,7 @@ void GrblControlPanel::finish_gcode_stream_from_worker()
 
 void GrblControlPanel::on_cancel_gcode_stream()
 {
-    if (!has_active_gcode_stream()) {
+    if (!get_runtime_state_view().gcode_active) {
         return;
     }
     if (!set_gcode_cancel_requested(true)) {
@@ -2566,7 +2641,17 @@ void GrblControlPanel::on_send_document_direct()
 
     run_gcode_stream_thread([this, doc, desktop, selection, use_current_layer_without_selection, params, win]
                             (std::unique_lock<std::mutex> &port_lock) mutable {
-        GrblPanelSender::run_direct_send_worker(*this, port_lock, doc, desktop, selection,
+        GrblPanelSenderContext context{
+            .link = _link.get(),
+            .cancel = &_gcode_cancel,
+            .post_status = [this](Glib::ustring const &text, bool is_error) { post_status(text, is_error); },
+            .post_not_connected_status = [this] { post_not_connected_status(); },
+            .post_gcode_stream_result = [this](std::string const &err) { post_gcode_stream_result(err); },
+            .refresh_plot_feedback_after_gcode_change = [this] { refresh_plot_feedback_after_gcode_change(); },
+            .finish_worker = [this](std::unique_lock<std::mutex> &lock) { finish_gcode_stream_worker(lock); },
+            .with_plot_waits = [this](std::function<void()> work) { with_grbl_plot_waits(std::move(work)); },
+        };
+        GrblPanelSender::run_direct_send_worker(context, port_lock, doc, desktop, selection,
                                                use_current_layer_without_selection, params, win);
     });
 }
@@ -2694,7 +2779,17 @@ void GrblControlPanel::on_send_gcode()
         [this, text = std::move(text), total_exec, send_from_cursor, editor_line_1]
         (std::unique_lock<std::mutex> &port_lock) mutable
         {
-            GrblPanelSender::run_editor_gcode_send_worker(*this, port_lock, std::move(text), total_exec,
+            GrblPanelSenderContext context{
+                .link = _link.get(),
+                .cancel = &_gcode_cancel,
+                .post_status = [this](Glib::ustring const &status, bool is_error) { post_status(status, is_error); },
+                .post_not_connected_status = [this] { post_not_connected_status(); },
+                .post_gcode_stream_result = [this](std::string const &err) { post_gcode_stream_result(err); },
+                .refresh_plot_feedback_after_gcode_change = [this] { refresh_plot_feedback_after_gcode_change(); },
+                .finish_worker = [this](std::unique_lock<std::mutex> &lock) { finish_gcode_stream_worker(lock); },
+                .with_plot_waits = [this](std::function<void()> work) { with_grbl_plot_waits(std::move(work)); },
+            };
+            GrblPanelSender::run_editor_gcode_send_worker(context, port_lock, std::move(text), total_exec,
                                                           send_from_cursor, editor_line_1);
         });
 }

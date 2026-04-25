@@ -30,6 +30,7 @@
 #include "display/control/canvas-item-bpath.h"
 #include "display/control/canvas-item-ptr.h"
 #include "display/control/canvas-item-text.h"
+#include "ui/dialog/grbl-panel-firmware-sync.h"
 #include "ui/dialog/dialog-base.h"
 
 namespace Inkscape::Axidraw {
@@ -45,7 +46,6 @@ namespace Inkscape::UI::Dialog {
 
 class GrblPanelWorkers;
 class GrblPanelSender;
-class GrblPanelFirmwareSync;
 
 class GrblControlPanel final : public DialogBase
 {
@@ -54,15 +54,20 @@ public:
     ~GrblControlPanel() final;
 
 private:
-    friend class GrblPanelSender;
-    friend class GrblPanelFirmwareSync;
-
     enum class RuntimePhase {
         idle,
         connecting,
         firmware_sync,
         gcode_sending,
         gcode_cancelling,
+    };
+    struct RuntimeStateView {
+        RuntimePhase phase = RuntimePhase::idle;
+        bool busy = false;
+        bool gcode_active = false;
+        bool cancel_requested = false;
+        bool connecting = false;
+        bool firmware_sync = false;
     };
 
     void build_ui();
@@ -107,14 +112,16 @@ private:
     bool is_runtime_busy() const;
     bool has_active_gcode_stream() const;
     RuntimePhase get_runtime_phase() const;
+    RuntimeStateView get_runtime_state_view() const;
     void refresh_runtime_ui_state();
+    bool set_runtime_flag(std::atomic<bool> &flag, bool active);
     bool begin_firmware_sync();
     void finish_gcode_stream_ui();
     /// Rejoins the G-code stream worker on the main loop, then mirrors @ref finish_gcode_stream_ui.
     void finish_gcode_stream_from_worker();
     void set_controls_sensitive_for_gcode_stream(bool allow);
-    void update_action_button_labels();
-    void update_connection_controls();
+    void update_action_button_labels(RuntimeStateView const &state);
+    void update_connection_controls(RuntimeStateView const &state);
     enum class BusyReasonContext { generic, export_action, send_action };
     Glib::ustring get_busy_reason_for_phase(RuntimePhase phase, BusyReasonContext context) const;
     bool get_busy_reason(bool block_connecting, bool block_firmware_sync, bool block_gcode_sending,
@@ -127,6 +134,7 @@ private:
     void set_firmware_info_text(Glib::ustring const &text);
     void set_mapping_sync_suspended(bool suspended) noexcept;
     bool should_sync_page_to_bed_on_firmware_read() const;
+    GrblFirmwareSyncApplyResult apply_firmware_snapshot_to_ui(GrblFirmwareSnapshot const &snapshot);
 
     void refresh_port_list();
     void on_port_combo_changed();

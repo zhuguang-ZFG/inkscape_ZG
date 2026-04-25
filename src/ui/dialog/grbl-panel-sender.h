@@ -5,12 +5,14 @@
 #ifndef INKSCAPE_UI_DIALOG_GRBL_PANEL_SENDER_H
 #define INKSCAPE_UI_DIALOG_GRBL_PANEL_SENDER_H
 
+#include <atomic>
 #include <cstddef>
 #include <functional>
 #include <mutex>
 #include <string>
 
 #include <glib.h>
+#include <glibmm/ustring.h>
 
 class SPDesktop;
 class SPDocument;
@@ -41,9 +43,9 @@ struct GrblPanelSenderContext {
 class GrblPanelSender {
 public:
     static void run_direct_send_worker(GrblPanelSenderContext const &context, std::unique_lock<std::mutex> &port_lock,
-                                       SPDocument *doc, SPDesktop *desktop, Selection *selection,
+                                       SPDocument *doc, SPDesktop *desktop, Inkscape::Selection *selection,
                                        bool use_current_layer_without_selection,
-                                       Axidraw::GrblExportParams params, Gtk::Window *win);
+                                       Axidraw::GrblExportParams const &params, Gtk::Window *win);
     static void run_editor_gcode_send_worker(GrblPanelSenderContext const &context, std::unique_lock<std::mutex> &port_lock,
                                              std::string text, std::size_t total_exec, bool send_from_cursor,
                                              guint editor_line_1);

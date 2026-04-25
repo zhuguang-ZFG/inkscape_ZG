@@ -2,8 +2,6 @@
 
 #include "grbl-panel-firmware-sync.h"
 
-#include "grbl-control-panel.h"
-
 #include <cmath>
 #include <sstream>
 #include <string>
@@ -20,16 +18,6 @@
 
 namespace Inkscape::UI::Dialog {
 namespace {
-
-struct GrblFirmwareSnapshot {
-    bool has_direction_mask = false;
-    int direction_mask = 0;
-    bool has_x_travel = false;
-    bool has_y_travel = false;
-    double x_travel_mm = 0.0;
-    double y_travel_mm = 0.0;
-    Glib::ustring display_text;
-};
 
 bool parse_grbl_setting_line(std::string const &line, int &code_out, std::string &value_out)
 {
@@ -113,26 +101,18 @@ Glib::ustring build_firmware_snapshot_text(std::vector<std::string> const &info_
 
 } // namespace
 
-void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const &stop)
+void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std::atomic<bool> const &stop)
 {
-    scope_exit const finish_sync{[&panel] {
-        Glib::signal_idle().connect_once(sigc::track_object([&panel] {
-            panel.set_firmware_syncing_state(false);
-            if (panel.is_connect_active()) {
-                panel.ensure_machine_status_poll(true);
-            }
-            panel.schedule_plot_feedback_refresh(false);
-        }, panel));
-    }};
+    scope_exit const finish_sync{[&context] { context.finish_sync_ui(); }};
 
     if (stop.load(std::memory_order_acquire)) {
         return;
     }
 
-    auto query_lines_locked = [&panel, &stop](std::string const &command, std::vector<std::string> &lines_out,
+    auto query_lines_locked = [&context, &stop](std::string const &command, std::vector<std::string> &lines_out,
                                               std::string &err_out) -> bool {
         lines_out.clear();
-        auto *link = panel.grbl_link();
+        auto *link = context.link;
         if (stop.load(std::memory_order_acquire) || !(link && link->is_open())) {
             err_out = "not connected";
             return false;
@@ -192,7 +172,7 @@ void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const
     std::vector<std::string> errors;
     GrblFirmwareSnapshot snapshot;
 
-    if (!panel.with_locked_open_link(stop, [&] {
+    if (!context.with_locked_open_link(stop, [&] {
         auto run_query = [&](std::string const &command, std::vector<std::string> &dest) {
             std::string err;
             if (!query_lines_locked(command, dest, err)) {
@@ -233,37 +213,7 @@ void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const
         return;
     }
 
-    Glib::signal_idle().connect_once(sigc::track_object([&panel, snapshot] {
-        auto apply_snapshot_to_ui = [&panel](GrblFirmwareSnapshot const &snapshot_in, bool &page_synced_out,
-                                             bool &unit_synced_out) {
-            bool changed_local = false;
-            panel.set_mapping_sync_suspended(true);
-            if (snapshot_in.has_direction_mask) {
-                changed_local = update_check_if_needed(panel._chk_invert_x, (snapshot_in.direction_mask & 0x1) != 0) || changed_local;
-                changed_local = update_check_if_needed(panel._chk_invert_y, (snapshot_in.direction_mask & 0x2) != 0) || changed_local;
-            }
-            if (snapshot_in.has_x_travel) {
-                changed_local = update_spin_if_needed(panel._bed_width_spin, snapshot_in.x_travel_mm) || changed_local;
-            }
-            if (snapshot_in.has_y_travel) {
-                changed_local = update_spin_if_needed(panel._bed_depth_spin, snapshot_in.y_travel_mm) || changed_local;
-            }
-            panel.set_mapping_sync_suspended(false);
-
-            page_synced_out = false;
-            unit_synced_out = false;
-            if (panel.should_sync_page_to_bed_on_firmware_read() && snapshot_in.has_x_travel && snapshot_in.has_y_travel) {
-                if (auto *doc = panel.getDocument()) {
-                    page_synced_out = panel.sync_document_page_to_bed_mm(doc, snapshot_in.x_travel_mm,
-                                                                         snapshot_in.y_travel_mm, unit_synced_out);
-                    if (page_synced_out) {
-                        panel.finalize_document_geometry_change(doc, GrblControlPanel::DocumentGeometryChange::sync_page_to_bed);
-                    }
-                }
-            }
-
-            return changed_local;
-        };
+    Glib::signal_idle().connect_once([context, snapshot] {
         auto build_sync_status = [](GrblFirmwareSnapshot const &snapshot_in, bool page_synced_in, bool unit_synced_in) {
             std::vector<Glib::ustring> notes;
             if (snapshot_in.has_direction_mask) {
@@ -300,19 +250,17 @@ void GrblPanelFirmwareSync::run(GrblControlPanel &panel, std::atomic<bool> const
             return Glib::ustring(msg.str());
         };
 
-        panel.set_firmware_info_text(snapshot.display_text);
+        context.set_firmware_info_text(snapshot.display_text);
 
-        bool page_synced = false;
-        bool unit_synced = false;
-        bool const changed = apply_snapshot_to_ui(snapshot, page_synced, unit_synced);
+        auto const apply_result = context.apply_snapshot_to_ui(snapshot);
 
-        if (changed) {
-            panel.save_mapping_preferences_from_ui(true);
+        if (apply_result.changed) {
+            context.save_mapping_preferences(true);
         } else {
-            panel.schedule_plot_feedback_refresh(true);
+            context.schedule_plot_feedback_refresh(true);
         }
-        panel.post_status(build_sync_status(snapshot, page_synced, unit_synced), false);
-    }, panel));
+        context.post_status(build_sync_status(snapshot, apply_result.page_synced, apply_result.unit_synced), false);
+    });
 }
 
 } // namespace Inkscape::UI::Dialog
