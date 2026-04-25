@@ -18,9 +18,10 @@ public:
     SerialPort &operator=(SerialPort const &) = delete;
     ~SerialPort();
 
-    bool open(std::string device, int baud_rate);
+    bool open(std::string device, int baud_rate, int open_timeout_ms = 4000);
     void close();
     bool is_open() const;
+    bool last_open_timed_out() const;
 
     void purge_io();
 
@@ -43,6 +44,7 @@ private:
 #else
     int _fd;
 #endif
+    bool _last_open_timed_out = false;
 };
 
 } // namespace Inkscape::Axidraw

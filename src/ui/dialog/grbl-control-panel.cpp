@@ -872,8 +872,11 @@ Glib::ustring describe_tcp_probe_failure_ui(Glib::ustring const &device,
     return Glib::ustring::compose(_("无法连接到 %1。\n%2"), device, detail);
 }
 
-Glib::ustring describe_connect_open_failure_ui(bool use_tcp)
+Glib::ustring describe_connect_open_failure_ui(bool use_tcp, bool timed_out)
 {
+    if (!use_tcp && timed_out) {
+        return _("打开所选串口连接超时。请检查串口是否被其他程序占用、驱动是否正常，以及控制器是否已上电。");
+    }
     return use_tcp ? Glib::ustring(_("无法打开所选 TCP 连接。")) : Glib::ustring(_("无法打开所选串口连接。"));
 }
 
@@ -2100,9 +2103,11 @@ void GrblControlPanel::start_connect_worker(ConnectRequest request)
                     return;
                 }
                 if (!opened) {
-                    Glib::signal_idle().connect_once(sigc::track_object([this, use_tcp = request.use_tcp()] {
-                        finish_connect_attempt_failed_ui(describe_connect_open_failure_ui(use_tcp));
-                    }, *this));
+                    Glib::signal_idle().connect_once(sigc::track_object(
+                        [this, use_tcp = request.use_tcp(), timed_out = !request.use_tcp() && port->last_open_timed_out()] {
+                            finish_connect_attempt_failed_ui(describe_connect_open_failure_ui(use_tcp, timed_out));
+                        },
+                        *this));
                     return;
                 }
 

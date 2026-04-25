@@ -6,7 +6,11 @@
 #include "serial-port.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
 #include <thread>
 
 #ifdef _WIN32
@@ -49,6 +53,11 @@ bool SerialPort::is_open() const
 #else
     return _fd >= 0;
 #endif
+}
+
+bool SerialPort::last_open_timed_out() const
+{
+    return _last_open_timed_out;
 }
 
 void SerialPort::close()
@@ -100,9 +109,10 @@ static bool posix_apply_baud(termios &tio, int baud)
 }
 #endif
 
-bool SerialPort::open(std::string device, int baud_rate)
+bool SerialPort::open(std::string device, int baud_rate, int open_timeout_ms)
 {
     close();
+    _last_open_timed_out = false;
     if (device.empty() || baud_rate <= 0) {
         return false;
     }
@@ -115,7 +125,62 @@ bool SerialPort::open(std::string device, int baud_rate)
         }
     }
 
-    HANDLE h = CreateFileA(device.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    auto open_handle = [&]() -> HANDLE {
+        if (open_timeout_ms < 0) {
+            return CreateFileA(device.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        }
+
+        struct AsyncOpenState {
+            std::mutex mutex;
+            std::condition_variable cv;
+            std::atomic<bool> abandon{false};
+            bool done = false;
+            HANDLE handle = INVALID_HANDLE_VALUE;
+        };
+
+        auto state = std::make_shared<AsyncOpenState>();
+        std::thread worker([state, device] {
+            HANDLE h =
+                CreateFileA(device.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (state->abandon.load(std::memory_order_acquire) && h != INVALID_HANDLE_VALUE) {
+                CloseHandle(h);
+                h = INVALID_HANDLE_VALUE;
+            }
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                state->handle = h;
+                state->done = true;
+            }
+            state->cv.notify_one();
+        });
+
+        bool completed = false;
+        {
+            std::unique_lock<std::mutex> lock(state->mutex);
+            completed = state->cv.wait_for(lock, std::chrono::milliseconds(open_timeout_ms),
+                                           [&] { return state->done; });
+        }
+
+        if (!completed) {
+            _last_open_timed_out = true;
+            state->abandon.store(true, std::memory_order_release);
+            CancelSynchronousIo(reinterpret_cast<HANDLE>(worker.native_handle()));
+            {
+                std::unique_lock<std::mutex> lock(state->mutex);
+                completed = state->cv.wait_for(lock, std::chrono::milliseconds(500), [&] { return state->done; });
+            }
+        }
+
+        if (completed) {
+            worker.join();
+        } else {
+            worker.detach();
+        }
+
+        return _last_open_timed_out ? INVALID_HANDLE_VALUE : state->handle;
+    };
+
+    HANDLE h = open_handle();
     if (h == INVALID_HANDLE_VALUE) {
         return false;
     }

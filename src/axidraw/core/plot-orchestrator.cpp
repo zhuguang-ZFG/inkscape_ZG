@@ -48,6 +48,7 @@ namespace {
 constexpr auto pref_device = "/options/grbl/serial-device";
 constexpr auto pref_baud = "/options/grbl/baud";
 constexpr auto pref_layer = "/options/grbl/limit-to-current-layer";
+constexpr int k_serial_open_timeout_ms = 4000;
 
 std::string describe_probe_failure(Glib::ustring const &device, int baud, GrblProbeResult const &probe)
 {
@@ -63,9 +64,68 @@ std::string describe_probe_failure(Glib::ustring const &device, int baud, GrblPr
         .raw();
 }
 
-std::string describe_open_failure(Glib::ustring const &device, int baud)
+std::string describe_open_failure(Glib::ustring const &device, int baud, bool timed_out)
 {
+    if (timed_out) {
+        return Glib::ustring::compose(
+                   _("Timed out while opening serial port %1 at %2 baud. Check whether another program is holding the "
+                     "port, whether the USB/serial driver is responsive, and whether the controller is powered."),
+                   device, baud)
+            .raw();
+    }
     return Glib::ustring::compose(_("Could not open serial port %1 at %2 baud."), device, baud).raw();
+}
+
+enum class ConnectWorkerStatus {
+    Ok,
+    OpenFailed,
+    ProbeFailed,
+    Cancelled,
+};
+
+struct ConnectWorkerResult {
+    ConnectWorkerStatus status = ConnectWorkerStatus::OpenFailed;
+    bool open_timed_out = false;
+    GrblProbeResult probe;
+    std::unique_ptr<SerialPort> port;
+};
+
+ConnectWorkerResult connect_and_probe_serial(std::string device, int baud, std::atomic<bool> const &cancel)
+{
+    ConnectWorkerResult result;
+    if (cancel.load(std::memory_order_acquire)) {
+        result.status = ConnectWorkerStatus::Cancelled;
+        return result;
+    }
+
+    auto port = std::make_unique<SerialPort>();
+    if (!port->open(device, baud, k_serial_open_timeout_ms)) {
+        result.status = ConnectWorkerStatus::OpenFailed;
+        result.open_timed_out = port->last_open_timed_out();
+        return result;
+    }
+
+    if (cancel.load(std::memory_order_acquire)) {
+        port->close();
+        result.status = ConnectWorkerStatus::Cancelled;
+        return result;
+    }
+
+    result.probe = probe_open_grbl(*port);
+    if (cancel.load(std::memory_order_acquire)) {
+        port->close();
+        result.status = ConnectWorkerStatus::Cancelled;
+        return result;
+    }
+
+    if (!result.probe.ok) {
+        result.status = ConnectWorkerStatus::ProbeFailed;
+        return result;
+    }
+
+    result.status = ConnectWorkerStatus::Ok;
+    result.port = std::move(port);
+    return result;
 }
 
 std::optional<Glib::ustring> prompt_serial_device(Gtk::Window &parent, Glib::ustring const &previous)
@@ -133,24 +193,78 @@ GrblConnectAttempt PlotOrchestrator::run_plot_grbl(SPDocument *doc, SPDesktop *d
         prefs->save();
     }
 
-    auto const probe = probe_grbl(device.raw(), baud);
-    if (!probe.ok) {
-        message_out = describe_probe_failure(device, baud, probe);
+    std::atomic<bool> connect_cancel{false};
+
+    Gtk::Dialog connect_dlg(_("Connecting to GRBL plotter"), true);
+    connect_dlg.set_transient_for(parent);
+    connect_dlg.set_modal(true);
+    connect_dlg.set_resizable(false);
+    connect_dlg.add_button(_("_Cancel"), Gtk::ResponseType::CANCEL);
+
+    Gtk::Label connect_label;
+    connect_label.set_wrap(true);
+    connect_label.set_margin_start(8);
+    connect_label.set_margin_end(8);
+    connect_label.set_margin_top(8);
+    connect_label.set_margin_bottom(8);
+    connect_label.set_markup(
+        Glib::ustring::compose(_("Opening %1 at %2 baud and probing for a GRBL response..."), device, baud));
+    if (auto *content = connect_dlg.get_content_area()) {
+        Inkscape::UI::pack_start(*content, connect_label, false, false, 0);
+    }
+    connect_dlg.signal_response().connect([&](int response) {
+        if (response == static_cast<int>(Gtk::ResponseType::CANCEL)) {
+            connect_cancel.store(true, std::memory_order_release);
+            connect_label.set_markup(
+                _("Cancelling connection attempt... waiting for the current serial operation to finish."));
+        }
+    });
+    connect_dlg.show();
+
+    auto connect_result = std::make_shared<ConnectWorkerResult>();
+    std::atomic<bool> connect_done{false};
+    std::thread connect_worker([connect_result, device_raw = device.raw(), baud, &connect_cancel, &connect_done] {
+        *connect_result = connect_and_probe_serial(device_raw, baud, connect_cancel);
+        connect_done.store(true, std::memory_order_release);
+    });
+
+    auto const ctx = Glib::MainContext::get_default();
+    while (!connect_done.load(std::memory_order_acquire)) {
+        if (ctx) {
+            while (ctx->iteration(false)) {
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    connect_worker.join();
+    connect_dlg.close();
+
+    if (connect_result->status == ConnectWorkerStatus::Cancelled) {
+        message_out = _("Plot cancelled.");
+        return GrblConnectAttempt::Cancelled;
+    }
+    if (connect_result->status == ConnectWorkerStatus::OpenFailed) {
+        message_out = describe_open_failure(device, baud, connect_result->open_timed_out);
+        return GrblConnectAttempt::Failed;
+    }
+    if (connect_result->status == ConnectWorkerStatus::ProbeFailed) {
+        message_out = describe_probe_failure(device, baud, connect_result->probe);
         return GrblConnectAttempt::Failed;
     }
 
-    SerialPort port;
-    if (!port.open(device.raw(), baud)) {
-        message_out = describe_open_failure(device, baud);
+    auto port = std::move(connect_result->port);
+    auto const probe = connect_result->probe;
+    if (!port || !port->is_open()) {
+        message_out = describe_open_failure(device, baud, false);
         return GrblConnectAttempt::Failed;
     }
 
-    port.purge_io();
+    port->purge_io();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     {
         std::string junk;
         for (int i = 0; i < 20; ++i) {
-            if (!port.read_line(junk, 60)) {
+            if (!port->read_line(junk, 60)) {
                 break;
             }
         }
@@ -283,7 +397,7 @@ GrblConnectAttempt PlotOrchestrator::run_plot_grbl(SPDocument *doc, SPDesktop *d
     std::size_t nstrokes = 0;
     GrblPlotStats stats{};
     std::string err;
-    if (!export_paths_to_grbl(port, doc, params, exctx, err, &nstrokes, &stats)) {
+    if (!export_paths_to_grbl(*port, doc, params, exctx, err, &nstrokes, &stats)) {
         if (err == grbl_error_user_cancelled()) {
             message_out = _("Plot cancelled.");
             return GrblConnectAttempt::Cancelled;
