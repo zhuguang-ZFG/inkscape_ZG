@@ -2072,15 +2072,6 @@ bool GrblControlPanel::resolve_connect_request(ConnectRequest &request)
 
     request.baud = prefs->getIntLimited(k_pref_baud, 115200, 9600, 230400);
     parse_tcp_device_spec(request.device.raw(), request.tcp_host, request.tcp_port);
-    if (!request.use_tcp()) {
-        Glib::ustring const host = prefs->getString(k_pref_net_host);
-        int const net_port = prefs->getIntLimited(k_pref_net_port, 23, 1, 65535);
-        if (!host.empty()) {
-            request.device = "tcp://" + host + ":" + std::to_string(net_port);
-            request.tcp_host = host.raw();
-            request.tcp_port = net_port;
-        }
-    }
     return true;
 }
 
