@@ -1479,6 +1479,11 @@ void GrblControlPanel::disconnect_controller(bool const announce_status)
     post_machine_status({});
 }
 
+void GrblControlPanel::finish_connect_attempt_failed_ui(Glib::ustring const &status, bool const clear_machine_status)
+{
+    finish_connect_attempt_ui(false, status, true, clear_machine_status);
+}
+
 void GrblControlPanel::finish_connect_attempt_ui(bool const keep_connect_active, Glib::ustring const &status,
                                                  bool const is_error, bool const clear_machine_status)
 {
@@ -1510,6 +1515,12 @@ void GrblControlPanel::post_connection_status(Glib::ustring const &device,
 void GrblControlPanel::post_not_connected_status(bool const serial_required)
 {
     post_status(serial_required ? Glib::ustring(_("尚未连接串口绘图机。")) : Glib::ustring(_("尚未连接。")), true);
+}
+
+void GrblControlPanel::finish_connect_attempt_succeeded_ui(Glib::ustring const &device,
+                                                           Inkscape::Axidraw::GrblProbeResult const &probe)
+{
+    finalize_successful_connection_ui(device, probe);
 }
 
 void GrblControlPanel::finalize_successful_connection_ui(Glib::ustring const &device,
@@ -2090,7 +2101,7 @@ void GrblControlPanel::start_connect_worker(ConnectRequest request)
                 }
                 if (!opened) {
                     Glib::signal_idle().connect_once(sigc::track_object([this, use_tcp = request.use_tcp()] {
-                        finish_connect_attempt_ui(false, describe_connect_open_failure_ui(use_tcp), true);
+                        finish_connect_attempt_failed_ui(describe_connect_open_failure_ui(use_tcp));
                     }, *this));
                     return;
                 }
@@ -2106,7 +2117,7 @@ void GrblControlPanel::start_connect_worker(ConnectRequest request)
                         auto const status = request.use_tcp()
                             ? describe_tcp_probe_failure_ui(request.device, probe)
                             : describe_probe_failure_ui(request.device, request.baud, probe);
-                        finish_connect_attempt_ui(false, status, true, true);
+                        finish_connect_attempt_failed_ui(status, true);
                     }, *this));
                     return;
                 }
@@ -2121,7 +2132,7 @@ void GrblControlPanel::start_connect_worker(ConnectRequest request)
                     _link->set_serial(std::move(port));
                 }
                 Glib::signal_idle().connect_once(sigc::track_object([this, device = request.device, probe] {
-                    finalize_successful_connection_ui(device, probe);
+                    finish_connect_attempt_succeeded_ui(device, probe);
                 }, *this));
             }, _("当前面板正在关闭，无法启动连接。"))) {
         set_connecting_state(false);

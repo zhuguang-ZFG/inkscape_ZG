@@ -155,8 +155,11 @@ private:
     bool on_machine_status_poll_timeout();
     void post_machine_status(Glib::ustring const &text);
     void disconnect_controller(bool announce_status);
+    void finish_connect_attempt_failed_ui(Glib::ustring const &status, bool clear_machine_status = false);
     void finish_connect_attempt_ui(bool keep_connect_active, Glib::ustring const &status, bool is_error,
                                    bool clear_machine_status = false);
+    void finish_connect_attempt_succeeded_ui(Glib::ustring const &device,
+                                             Inkscape::Axidraw::GrblProbeResult const &probe);
     void finalize_successful_connection_ui(Glib::ustring const &device, Inkscape::Axidraw::GrblProbeResult const &probe);
     void post_connection_status(Glib::ustring const &device, Inkscape::Axidraw::GrblProbeResult const *probe = nullptr);
     void post_not_connected_status(bool serial_required = false);
