@@ -125,6 +125,7 @@ target_sources(inkscape_base PRIVATE
 	dialog/choose-file.cpp
 	dialog/debug.cpp
 	dialog/grbl-control-panel.cpp
+	dialog/grbl-panel-sender.cpp
 	dialog/grbl-panel-workers.cpp
 	dialog/choose-file-utils.cpp
 	dialog/dialog-base.cpp

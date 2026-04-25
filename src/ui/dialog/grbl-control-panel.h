@@ -44,6 +44,7 @@ class SPPage;
 namespace Inkscape::UI::Dialog {
 
 class GrblPanelWorkers;
+class GrblPanelSender;
 
 class GrblControlPanel final : public DialogBase
 {
@@ -52,6 +53,8 @@ public:
     ~GrblControlPanel() final;
 
 private:
+    friend class GrblPanelSender;
+
     enum class RuntimePhase {
         idle,
         connecting,
@@ -171,7 +174,9 @@ private:
     void post_gcode_stream_result(std::string const &err);
     void join_gcode_stream_thread();
     void start_gcode_stream_thread(std::function<void()> work);
+    void run_gcode_stream_thread(std::function<void(std::unique_lock<std::mutex> &)> work);
     void finish_gcode_stream_worker(std::unique_lock<std::mutex> &port_lock);
+    void with_grbl_plot_waits(std::function<void()> work);
     std::unique_ptr<GrblPanelWorkers> _workers;
     std::unique_ptr<Inkscape::Axidraw::GrblLink> _link;
     std::mutex _gcode_stream_thread_mutex;

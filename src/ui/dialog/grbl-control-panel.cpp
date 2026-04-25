@@ -63,6 +63,7 @@
 #include "ui/dialog/choose-file-utils.h"
 #include "ui/dialog/choose-file.h"
 #include "ui/dialog/grbl-panel-workers.h"
+#include "ui/dialog/grbl-panel-sender.h"
 #include "ui/dialog-run.h"
 #include "ui/pack.h"
 #include "ui/widget/canvas.h"
@@ -261,8 +262,6 @@ std::size_t count_executable_gcode_lines(std::string const &text)
     return n;
 }
 
-constexpr int k_gcode_send_progress_min_interval_ms = 350;
-constexpr std::size_t k_gcode_send_progress_line_stride = 80;
 constexpr std::size_t k_preview_max_strokes = 12000;
 
 constexpr auto k_pref_device = "/options/grbl/serial-device";
@@ -726,34 +725,6 @@ Glib::ustring make_fill_gcode_status(std::size_t strokes, Inkscape::Axidraw::Grb
                                    static_cast<guint64>(strokes));
 }
 
-Glib::ustring make_direct_send_progress_status(std::size_t stroke_done, std::size_t stroke_total, std::size_t lines_sent,
-                                               std::size_t lines_est)
-{
-    if (lines_est > 0 && lines_sent > 0 && stroke_total > 0 && stroke_done > 0) {
-        return Glib::ustring::compose(_("正在发送：第 %1 / %2 条笔画，第 %3 / ~%4 行..."),
-                                      static_cast<guint64>(stroke_done), static_cast<guint64>(stroke_total),
-                                      static_cast<guint64>(lines_sent), static_cast<guint64>(lines_est));
-    }
-    if (lines_est > 0 && lines_sent > 0) {
-        return Glib::ustring::compose(_("正在发送：第 %1 / ~%2 行..."), static_cast<guint64>(lines_sent),
-                                      static_cast<guint64>(lines_est));
-    }
-    if (stroke_total > 0 && stroke_done > 0) {
-        return Glib::ustring::compose(_("正在发送：第 %1 / %2 条笔画..."), static_cast<guint64>(stroke_done),
-                                      static_cast<guint64>(stroke_total));
-    }
-    return {};
-}
-
-Glib::ustring make_direct_send_done_status(std::size_t strokes, Inkscape::Axidraw::GrblPlotStats const &stats)
-{
-    Glib::ustring ratio;
-    if (get_air_travel_ratio_text(stats, ratio)) {
-        return Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画，空走占比约 %2%%。"),
-                                      static_cast<guint64>(strokes), ratio);
-    }
-    return Glib::ustring::compose(_("图稿直发完成：共发送 %1 条笔画。"), static_cast<guint64>(strokes));
-}
 /// Last folder for G-code save/open dialogs in this panel.
 constexpr auto k_pref_save_gcode_dir = "/dialogs/grblcontrol/save_gcode_dir";
 constexpr std::size_t k_max_gcode_editor_bytes = 32u * 1024u * 1024u;
@@ -1793,12 +1764,33 @@ void GrblControlPanel::start_gcode_stream_thread(std::function<void()> work)
     });
 }
 
+void GrblControlPanel::run_gcode_stream_thread(std::function<void(std::unique_lock<std::mutex> &)> work)
+{
+    start_gcode_stream_thread([this, work = std::move(work)]() mutable {
+        std::unique_lock<std::mutex> port_lock(_port_mutex);
+        work(port_lock);
+    });
+}
+
 void GrblControlPanel::finish_gcode_stream_worker(std::unique_lock<std::mutex> &port_lock)
 {
     if (port_lock.owns_lock()) {
         port_lock.unlock();
     }
     finish_gcode_stream_from_worker();
+}
+
+void GrblControlPanel::with_grbl_plot_waits(std::function<void()> work)
+{
+    auto pump = [] {
+        if (auto const ctx = Glib::MainContext::get_default()) {
+            while (ctx->iteration(false)) {
+            }
+        }
+    };
+    grbl_begin_plot_waits(pump, &_gcode_cancel);
+    scope_exit const end_plot{[] { grbl_end_plot_waits(); }};
+    work();
 }
 
 void GrblControlPanel::ensure_machine_status_poll(bool const on)
@@ -2711,95 +2703,10 @@ void GrblControlPanel::on_send_document_direct()
         return;
     }
 
-    start_gcode_stream_thread([this, doc, desktop, selection, use_current_layer_without_selection, params, win]() mutable {
-        std::unique_lock<std::mutex> port_lock(_port_mutex);
-        auto const finish = [this, &port_lock] { finish_gcode_stream_worker(port_lock); };
-
-        auto *serial = _link ? _link->serial_port() : nullptr;
-        if (!serial || !serial->is_open()) {
-            post_status(_("串口已断开。"), true);
-            finish();
-            return;
-        }
-
-        Inkscape::Axidraw::GrblExportContext ctx;
-        ctx.desktop = desktop;
-        ctx.selection = selection;
-        ctx.use_current_layer_without_selection = use_current_layer_without_selection;
-        ctx.cancel = &_gcode_cancel;
-
-        auto pump = [] {
-            if (auto const ctx = Glib::MainContext::get_default()) {
-                while (ctx->iteration(false)) {
-                }
-            }
-        };
-
-        if (params.manual_pen_change && params.pen_change_prompt && win) {
-            ctx.on_manual_pen_change_between_layers = [win](double, double) -> bool {
-                Gtk::MessageDialog dlg(
-                    *win,
-                    _("下一层即将开始绘制。\n如果你按图层分笔/分颜色，请现在手动换笔，然后点击“是”继续。"),
-                    true, Gtk::MessageType::QUESTION, Gtk::ButtonsType::YES_NO, true);
-                dlg.set_secondary_text(
-                    _("流程与 AxiDraw 手动换笔一致：先抬笔，可选回到原点，确认后再回到断点继续绘制。"));
-                return Inkscape::UI::dialog_run(dlg) == Gtk::ResponseType::YES;
-            };
-        }
-
-        struct StreamProgress {
-            std::size_t stroke_done = 0;
-            std::size_t stroke_total = 0;
-            std::size_t lines_sent = 0;
-            std::size_t lines_est = 0;
-        };
-        auto const progress = std::make_shared<StreamProgress>();
-        using clock = std::chrono::steady_clock;
-        auto const last_paint = std::make_shared<clock::time_point>(clock::time_point::min());
-        auto const refresh_status = [this, progress, last_paint]() {
-            if (progress->lines_est == 0 && progress->stroke_total == 0) {
-                return;
-            }
-            auto const now = clock::now();
-            constexpr auto k_min_interval = std::chrono::milliseconds(100);
-            bool const at_end = (progress->lines_est > 0 && progress->lines_sent >= progress->lines_est) ||
-                                (progress->stroke_total > 0 && progress->stroke_done >= progress->stroke_total);
-            if (!at_end && now - *last_paint < k_min_interval) {
-                return;
-            }
-            *last_paint = now;
-            auto const status = make_direct_send_progress_status(progress->stroke_done, progress->stroke_total,
-                                                                 progress->lines_sent, progress->lines_est);
-            if (!status.empty()) {
-                post_status(status, false);
-            }
-        };
-        ctx.on_plot_stroke_progress = [progress, refresh_status](std::size_t done, std::size_t total) {
-            progress->stroke_done = done;
-            progress->stroke_total = total;
-            refresh_status();
-        };
-        ctx.on_plot_gcode_line_progress = [progress, refresh_status](std::size_t sent, std::size_t est) {
-            progress->lines_sent = sent;
-            progress->lines_est = est;
-            refresh_status();
-        };
-
-        grbl_begin_plot_waits(pump, &_gcode_cancel);
-        scope_exit const end_plot{[] { grbl_end_plot_waits(); }};
-
-        std::string err;
-        std::size_t strokes = 0;
-        GrblPlotStats stats{};
-        if (!export_paths_to_grbl(*serial, doc, params, ctx, err, &strokes, &stats)) {
-            post_gcode_stream_result(err);
-            finish();
-            return;
-        }
-
-        refresh_plot_feedback_after_gcode_change();
-        post_status(make_direct_send_done_status(strokes, stats), false);
-        finish();
+    run_gcode_stream_thread([this, doc, desktop, selection, use_current_layer_without_selection, params, win]
+                            (std::unique_lock<std::mutex> &port_lock) mutable {
+        GrblPanelSender::run_direct_send_worker(*this, port_lock, doc, desktop, selection,
+                                               use_current_layer_without_selection, params, win);
     });
 }
 
@@ -2922,100 +2829,12 @@ void GrblControlPanel::on_send_gcode()
         return;
     }
 
-    start_gcode_stream_thread(
-        [this, text = std::move(text), total_exec, send_from_cursor, editor_line_1]() mutable
+    run_gcode_stream_thread(
+        [this, text = std::move(text), total_exec, send_from_cursor, editor_line_1]
+        (std::unique_lock<std::mutex> &port_lock) mutable
         {
-            std::unique_lock<std::mutex> port_lock(_port_mutex);
-            auto const finish = [this, &port_lock] { finish_gcode_stream_worker(port_lock); };
-
-            if (!(_link && _link->is_open())) {
-                post_not_connected_status();
-                finish();
-                return;
-            }
-
-            auto pump = [] {
-                if (auto const ctx = Glib::MainContext::get_default()) {
-                    while (ctx->iteration(false)) {
-                    }
-                }
-            };
-            grbl_begin_plot_waits(pump, &_gcode_cancel);
-            scope_exit const end_plot{[] { grbl_end_plot_waits(); }};
-
-            if (send_from_cursor) {
-                post_status(Glib::ustring::compose(_("正在从编辑器第 %1 行开始发送 G-code..."),
-                                                   static_cast<guint64>(editor_line_1)),
-                            false);
-            }
-
-            using clock = std::chrono::steady_clock;
-            clock::time_point last_progress_wall = clock::now();
-            std::size_t last_progress_at_sent = 0;
-            auto try_send_progress = [&](std::size_t sent, bool force) {
-                if (total_exec == 0) {
-                    return;
-                }
-                clock::time_point const now = clock::now();
-                std::size_t const span = sent - last_progress_at_sent;
-                int const elapsed_ms =
-                    static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(now - last_progress_wall)
-                                         .count());
-                if (!force && sent != 1 && span < k_gcode_send_progress_line_stride &&
-                    elapsed_ms < k_gcode_send_progress_min_interval_ms) {
-                    return;
-                }
-                if (total_exec <= k_max_gcode_stream_lines) {
-                    post_status(Glib::ustring::compose(_("正在发送 G-code：第 %1 / %2 行..."), static_cast<guint64>(sent),
-                                                       static_cast<guint64>(total_exec)),
-                                false);
-                } else {
-                    post_status(
-                        Glib::ustring::compose(
-                            _("正在发送 G-code：第 %1 行（程序超过 %2 行限制；发送将在报错时停止）..."),
-                            static_cast<guint64>(sent), static_cast<guint64>(k_max_gcode_stream_lines)),
-                        false);
-                }
-                last_progress_wall = now;
-                last_progress_at_sent = sent;
-            };
-
-            std::string err;
-            bool write_failed = false;
-            std::size_t sent = 0;
-            for_each_executable_gcode_line(text, [&](std::string const &line) {
-                if (!err.empty() || write_failed) {
-                    return;
-                }
-                if (sent >= k_max_gcode_stream_lines) {
-                    err = _("G-code 行数过多（已超出限制）。");
-                    return;
-                }
-                if (!_link->send_line_wait_ok(line, err)) {
-                    write_failed = true;
-                    return;
-                }
-                ++sent;
-                try_send_progress(sent, false);
-            });
-            if (write_failed) {
-                post_gcode_stream_result(err);
-                finish();
-                return;
-            }
-            if (!err.empty()) {
-                post_gcode_stream_result(err);
-            } else if (sent == 0) {
-                post_status(_("没有可执行的行（只有空行或注释）。"), false);
-            } else if (send_from_cursor) {
-                post_status(Glib::ustring::compose(_("已发送 %1 行 G-code（起始于编辑器第 %2 行）。"),
-                                                   static_cast<guint64>(sent), static_cast<guint64>(editor_line_1)),
-                            false);
-            } else {
-                post_status(
-                    Glib::ustring::compose(_("已发送 %1 行 G-code。"), static_cast<guint64>(sent)), false);
-            }
-            finish();
+            GrblPanelSender::run_editor_gcode_send_worker(*this, port_lock, std::move(text), total_exec,
+                                                          send_from_cursor, editor_line_1);
         });
 }
 
