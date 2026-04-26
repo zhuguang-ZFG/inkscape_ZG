@@ -517,6 +517,8 @@ protected:
     UI::Widget::PrefSpinButton    _grbl_hatch_spacing;
     UI::Widget::PrefSpinButton    _grbl_hatch_angle;
     UI::Widget::PrefCheckButton   _grbl_hatch_cross;
+    UI::Widget::PrefCheckButton   _grbl_hatch_angle_increment_enable;
+    UI::Widget::PrefSpinButton    _grbl_hatch_angle_increment;
     UI::Widget::PrefCheckButton   _grbl_flip_y_canvas;
     UI::Widget::PrefCheckButton   _grbl_align_origin;
     UI::Widget::PrefCheckButton   _grbl_clip_bed;

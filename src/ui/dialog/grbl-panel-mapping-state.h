@@ -22,6 +22,7 @@ struct GrblPanelMappingSensitivity
     bool sparse_sampling = false;
     bool contour_to_hatch = false;
     bool hatch_cross = false;
+    bool hatch_angle_increment_enable = false;
     bool tool_change_mode = false;
     bool draw_feed = false;
     bool travel_feed = false;
@@ -31,6 +32,7 @@ struct GrblPanelMappingSensitivity
     bool lead_out_dist = false;
     bool hatch_spacing = false;
     bool hatch_angle = false;
+    bool hatch_angle_increment = false;
     bool pen_up_cmd = false;
     bool pen_down_cmd = false;
     bool manual_pen_change_to_home = false;

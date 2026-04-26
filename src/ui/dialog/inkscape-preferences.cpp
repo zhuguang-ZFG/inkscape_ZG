@@ -2672,6 +2672,10 @@ void InkscapePreferences::initPageIO()
     _grbl_hatch_spacing.init("/options/grbl/hatch-spacing-mm", 0.05, 100.0, 0.05, 0.5, 1.0, false, false);
     _grbl_hatch_angle.init("/options/grbl/hatch-angle-deg", -180.0, 180.0, 1.0, 10.0, 0.0, false, false);
     _grbl_hatch_cross.init(_("Add _cross hatch"), "/options/grbl/hatch-cross", false);
+    _grbl_hatch_angle_increment_enable.init(_("Enable hatch angle _increment"),
+                                            "/options/grbl/hatch-angle-increment-enable", false);
+    _grbl_hatch_angle_increment.init("/options/grbl/hatch-angle-increment-deg", -180.0, 180.0, 1.0, 10.0, 5.0,
+                                     false, false);
     _page_grbl.add_line(
         false, _("Hatch _spacing (mm):"), _grbl_hatch_spacing, "",
         _("Distance between adjacent scanlines when “Convert closed contours to hatch scanlines” is enabled."),
@@ -2684,11 +2688,22 @@ void InkscapePreferences::initPageIO()
         false, "", _grbl_hatch_cross, "",
         _("Add a second hatch pass rotated by 90 degrees from the main hatch angle. This increases line count and runtime."),
         true, reset_icon());
+    _page_grbl.add_line(
+        false, "", _grbl_hatch_angle_increment_enable, "",
+        _("After each closed contour is converted to hatch, rotate the next contour's hatch by the increment below."),
+        true, reset_icon());
+    _page_grbl.add_line(
+        false, _("Hatch angle i_ncrement (deg):"), _grbl_hatch_angle_increment, "",
+        _("Angle added after each closed contour when hatch angle increment is enabled."),
+        false);
     _grbl_optimize_direction.set_sensitive(_grbl_optimize_order.get_active());
     _grbl_contour_to_hatch.set_sensitive(true);
     _grbl_hatch_spacing.set_sensitive(_grbl_contour_to_hatch.get_active());
     _grbl_hatch_angle.set_sensitive(_grbl_contour_to_hatch.get_active());
     _grbl_hatch_cross.set_sensitive(_grbl_contour_to_hatch.get_active());
+    _grbl_hatch_angle_increment_enable.set_sensitive(_grbl_contour_to_hatch.get_active());
+    _grbl_hatch_angle_increment.set_sensitive(_grbl_contour_to_hatch.get_active() &&
+                                              _grbl_hatch_angle_increment_enable.get_active());
     _grbl_optimize_order.changed_signal.connect([this](bool) {
         _grbl_optimize_direction.set_sensitive(_grbl_optimize_order.get_active());
     });
@@ -2696,6 +2711,13 @@ void InkscapePreferences::initPageIO()
         _grbl_hatch_spacing.set_sensitive(_grbl_contour_to_hatch.get_active());
         _grbl_hatch_angle.set_sensitive(_grbl_contour_to_hatch.get_active());
         _grbl_hatch_cross.set_sensitive(_grbl_contour_to_hatch.get_active());
+        _grbl_hatch_angle_increment_enable.set_sensitive(_grbl_contour_to_hatch.get_active());
+        _grbl_hatch_angle_increment.set_sensitive(_grbl_contour_to_hatch.get_active() &&
+                                                  _grbl_hatch_angle_increment_enable.get_active());
+    });
+    _grbl_hatch_angle_increment_enable.changed_signal.connect([this](bool) {
+        _grbl_hatch_angle_increment.set_sensitive(_grbl_contour_to_hatch.get_active() &&
+                                                  _grbl_hatch_angle_increment_enable.get_active());
     });
 
     _page_grbl.add_group_header(_("Plot coordinates and limits"));

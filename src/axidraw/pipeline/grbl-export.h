@@ -87,6 +87,9 @@ struct GrblExportParams {
     double hatch_spacing_mm = 1.0;
     /// Hatch line angle in degrees (0 = horizontal scanlines in machine coordinates).
     double hatch_angle_deg = 0.0;
+    /// After each closed contour converted to hatch, increment the hatch angle by @a hatch_angle_increment_deg.
+    bool hatch_angle_increment_enable = false;
+    double hatch_angle_increment_deg = 5.0;
     /// Add a second hatch pass rotated by 90 degrees from @a hatch_angle_deg.
     bool hatch_cross = false;
 
