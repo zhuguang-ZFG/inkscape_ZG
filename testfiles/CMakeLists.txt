@@ -267,6 +267,60 @@ if(WIN32)
 endif()
 add_unit_test(grbl-panel-workers-test TEST_SOURCE "grbl-panel-workers-test.cpp"
                                       SOURCES "ui/dialog/grbl-panel-workers.cpp")
+add_unit_test(grbl-panel-connect-attempt-test TEST_SOURCE "grbl-panel-connect-attempt-test.cpp"
+                                              SOURCES "ui/dialog/grbl-panel-connect-attempt.cpp"
+                                                      "axidraw/device/grbl-client.cpp"
+                                                      "axidraw/device/serial-port.cpp"
+                                                      "axidraw/device/tcp-port.cpp"
+                                      EXTRA_LIBS GLibmm::GLibmm)
+if(WIN32)
+    target_link_libraries(grbl-panel-connect-attempt-test ws2_32)
+endif()
+add_unit_test(grbl-panel-connection-state-test TEST_SOURCE "grbl-panel-connection-state-test.cpp"
+                                               SOURCES "ui/dialog/grbl-panel-connection-state.cpp"
+                                            EXTRA_LIBS GLibmm::GLibmm)
+add_unit_test(grbl-panel-document-layout-test TEST_SOURCE "grbl-panel-document-layout-test.cpp"
+                                              SOURCES "ui/dialog/grbl-panel-document-layout.cpp"
+                                   EXTRA_LIBS GLibmm::GLibmm 2Geom::2geom)
+add_unit_test(grbl-panel-firmware-sync-state-test TEST_SOURCE "grbl-panel-firmware-sync-state-test.cpp"
+                                                  SOURCES "ui/dialog/grbl-panel-firmware-sync-state.cpp"
+                                       EXTRA_LIBS GLibmm::GLibmm)
+add_unit_test(grbl-panel-mapping-prefs-test TEST_SOURCE "grbl-panel-mapping-prefs-test.cpp"
+                                            SOURCES "ui/dialog/grbl-panel-mapping-mode.cpp")
+add_unit_test(grbl-panel-mapping-state-test TEST_SOURCE "grbl-panel-mapping-state-test.cpp"
+                                            SOURCES "ui/dialog/grbl-panel-mapping-state.cpp")
+add_unit_test(grbl-editor-gcode-test TEST_SOURCE "grbl-editor-gcode-test.cpp"
+                                     SOURCES "ui/dialog/grbl-editor-gcode.cpp"
+                          EXTRA_LIBS GLibmm::GLibmm)
+add_unit_test(grbl-editor-generation-state-test TEST_SOURCE "grbl-editor-generation-state-test.cpp"
+                                                SOURCES "ui/dialog/grbl-editor-generation-state.cpp"
+                                                        "ui/dialog/grbl-editor-gcode.cpp"
+                                     EXTRA_LIBS GLibmm::GLibmm)
+add_unit_test(grbl-runtime-state-test TEST_SOURCE "grbl-runtime-state-test.cpp"
+                                      SOURCES "ui/dialog/grbl-runtime-state.cpp"
+                           EXTRA_LIBS GLibmm::GLibmm)
+add_unit_test(grbl-panel-presentation-test TEST_SOURCE "grbl-panel-presentation-test.cpp"
+                                           SOURCES "ui/dialog/grbl-panel-presentation.cpp"
+                                                   "ui/dialog/grbl-runtime-state.cpp"
+                                EXTRA_LIBS GLibmm::GLibmm)
+add_unit_test(grbl-panel-export-session-test TEST_SOURCE "grbl-panel-export-session-test.cpp"
+                                             SOURCES "ui/dialog/grbl-panel-export-session.cpp"
+                                  EXTRA_LIBS GLibmm::GLibmm 2Geom::2geom)
+add_unit_test(grbl-panel-feedback-state-test TEST_SOURCE "grbl-panel-feedback-state-test.cpp"
+                                             SOURCES "ui/dialog/grbl-panel-feedback-state.cpp")
+add_unit_test(grbl-panel-feedback-presentation-test TEST_SOURCE "grbl-panel-feedback-presentation-test.cpp"
+                                                    SOURCES "ui/dialog/grbl-panel-feedback-presentation.cpp"
+                                         EXTRA_LIBS GLibmm::GLibmm)
+add_unit_test(grbl-panel-summary-presentation-test TEST_SOURCE "grbl-panel-summary-presentation-test.cpp"
+                                                   SOURCES "ui/dialog/grbl-panel-summary-presentation.cpp"
+                                        EXTRA_LIBS GLibmm::GLibmm 2Geom::2geom)
+add_unit_test(grbl-panel-job-guard-test TEST_SOURCE "grbl-panel-job-guard-test.cpp"
+                                        SOURCES "ui/dialog/grbl-panel-job-guard.cpp"
+                                                "ui/dialog/grbl-editor-gcode.cpp"
+                                                "ui/dialog/grbl-editor-generation-state.cpp"
+                             EXTRA_LIBS GLibmm::GLibmm)
+add_unit_test(grbl-panel-transport-state-test TEST_SOURCE "grbl-panel-transport-state-test.cpp"
+                                              SOURCES "ui/dialog/grbl-panel-transport-state.cpp")
 
 add_dependencies(tests unit_tests)
 

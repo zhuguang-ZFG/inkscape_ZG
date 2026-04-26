@@ -2699,7 +2699,7 @@ void InkscapePreferences::initPageIO()
         _("Subtracts the minimum X and Y of all exported points (in machine millimetres after optional mirroring) so the "
           "bounding box corner sits at the origin—handy when homing the pen to the front-left corner."),
         true, reset_icon());
-    _grbl_clip_bed.init(_("Clip segments to machine _bed size"), "/options/grbl/clip-to-machine-bed", false);
+    _grbl_clip_bed.init(_("Clip segments to machine _bed size"), "/options/grbl/clip-to-machine-bed", true);
     _page_grbl.add_line(
         false, "", _grbl_clip_bed, "",
         _("Keeps G0/G1 moves inside a rectangle from (0, 0) to the width/depth below. Segments are clipped; disjoint pieces "

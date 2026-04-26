@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #include <gtkmm/box.h>
@@ -30,6 +31,18 @@
 #include "display/control/canvas-item-bpath.h"
 #include "display/control/canvas-item-ptr.h"
 #include "display/control/canvas-item-text.h"
+#include "ui/dialog/grbl-editor-generation-state.h"
+#include "ui/dialog/grbl-panel-connect-attempt.h"
+#include "ui/dialog/grbl-panel-connection-state.h"
+#include "ui/dialog/grbl-panel-document-geometry.h"
+#include "ui/dialog/grbl-panel-export-session.h"
+#include "ui/dialog/grbl-panel-firmware-sync-state.h"
+#include "ui/dialog/grbl-panel-job-guard.h"
+#include "ui/dialog/grbl-panel-mapping-prefs.h"
+#include "ui/dialog/grbl-panel-presentation.h"
+#include "ui/dialog/grbl-panel-sender.h"
+#include "ui/dialog/grbl-panel-transport-state.h"
+#include "ui/dialog/grbl-runtime-state.h"
 #include "ui/dialog/grbl-panel-firmware-sync.h"
 #include "ui/dialog/dialog-base.h"
 
@@ -54,30 +67,6 @@ public:
     ~GrblControlPanel() final;
 
 private:
-    enum class RuntimePhase {
-        idle,
-        connecting,
-        firmware_sync,
-        gcode_sending,
-        gcode_cancelling,
-    };
-    struct RuntimeStateView {
-        RuntimePhase phase = RuntimePhase::idle;
-        bool busy = false;
-        bool gcode_active = false;
-        bool cancel_requested = false;
-        bool connecting = false;
-        bool firmware_sync = false;
-    };
-    struct ConnectRequest {
-        Glib::ustring device;
-        int baud = 115200;
-        std::string tcp_host;
-        int tcp_port = 0;
-
-        bool use_tcp() const { return !tcp_host.empty() && tcp_port > 0; }
-    };
-
     void build_ui();
     void on_map() override;
     void on_unmap() override;
@@ -119,22 +108,23 @@ private:
     void update_mapping_control_sensitivity(bool allow_interaction = true);
     bool is_runtime_busy() const;
     bool has_active_gcode_stream() const;
-    RuntimePhase get_runtime_phase() const;
-    RuntimeStateView get_runtime_state_view() const;
+    GrblRuntimePhase get_runtime_phase() const;
+    GrblRuntimeStateView get_runtime_state_view() const;
     void refresh_runtime_ui_state();
     bool set_runtime_flag(std::atomic<bool> &flag, bool active);
     void begin_connect_attempt_ui(Glib::ustring const &status);
     bool begin_firmware_sync();
+    bool launch_firmware_sync_worker();
+    bool request_firmware_sync(GrblFirmwareSyncRequestOrigin origin);
+    void queue_delayed_connect_firmware_sync();
     void complete_firmware_sync_ui(bool resume_machine_status_poll, bool refresh_plot_feedback);
     void finish_gcode_stream_ui();
     /// Rejoins the G-code stream worker on the main loop, then mirrors @ref finish_gcode_stream_ui.
     void finish_gcode_stream_from_worker();
     void complete_gcode_stream_ui(bool join_worker_thread);
     void set_controls_sensitive_for_gcode_stream(bool allow);
-    void update_action_button_labels(RuntimeStateView const &state);
-    void update_connection_controls(RuntimeStateView const &state);
-    enum class BusyReasonContext { generic, export_action, send_action };
-    Glib::ustring get_busy_reason_for_phase(RuntimePhase phase, BusyReasonContext context) const;
+    void apply_connection_plan(GrblPanelConnectionUiPlan const &plan, Glib::ustring const *status = nullptr);
+    void apply_transport_plan(GrblPanelTransportPlan const &plan);
     bool get_busy_reason(bool block_connecting, bool block_firmware_sync, bool block_gcode_sending,
                          Glib::ustring &reason) const;
     bool is_machine_command_blocked(Glib::ustring &reason) const;
@@ -149,8 +139,8 @@ private:
 
     void refresh_port_list();
     void on_port_combo_changed();
-    bool resolve_connect_request(ConnectRequest &request);
-    void start_connect_worker(ConnectRequest request);
+    bool resolve_connect_request(GrblPanelConnectRequest &request);
+    void start_connect_worker(GrblPanelConnectRequest request);
     void ensure_machine_status_poll(bool on);
     bool on_machine_status_poll_timeout();
     void post_machine_status(Glib::ustring const &text);
@@ -163,32 +153,35 @@ private:
     void finalize_successful_connection_ui(Glib::ustring const &device, Inkscape::Axidraw::GrblProbeResult const &probe);
     void post_connection_status(Glib::ustring const &device, Inkscape::Axidraw::GrblProbeResult const *probe = nullptr);
     void post_not_connected_status(bool serial_required = false);
+    void apply_mapping_preferences_to_ui(GrblPanelMappingPrefs const &values);
+    GrblPanelMappingPrefs read_mapping_preferences_from_ui() const;
     void load_mapping_preferences_to_ui();
     void save_mapping_preferences_from_ui(bool refresh_preview = true);
+    void connect_mapping_preference_signals();
     void update_tool_change_mode_ui();
     void refresh_plot_summaries();
     bool is_plot_feedback_blocked() const;
     bool require_active_plot_target(SPDocument *&doc, SPDesktop *&desktop, bool clear_preview_on_failure = true);
-    void prepare_export_settings(SPDesktop *desktop, Inkscape::Axidraw::GrblExportParams &params,
-                                 Inkscape::Axidraw::GrblExportContext &ctx);
-    bool prepare_active_export_target(SPDocument *&doc, SPDesktop *&desktop, Inkscape::Axidraw::GrblExportParams &params,
-                                      Inkscape::Axidraw::GrblExportContext &ctx, bool clear_preview_on_failure = true);
+    GrblPanelExportSession make_export_session(SPDesktop *desktop, std::atomic<bool> const *cancel = nullptr) const;
+    bool prepare_active_export_target(SPDocument *&doc, SPDesktop *&desktop, GrblPanelExportSession &session,
+                                      bool clear_preview_on_failure = true);
     void refresh_plot_feedback_after_gcode_change();
     Gtk::Window *get_dialog_parent_window(char const *missing_parent_message);
+    GrblPanelSenderContext make_sender_context();
+    void replace_editor_gcode_text(std::string const &text,
+                                   std::optional<Inkscape::Axidraw::GrblExportParams> generated_params = std::nullopt);
     bool get_editor_gcode_text(std::string &text, bool send_from_cursor = false, guint *editor_line_1 = nullptr);
+    void clear_editor_gcode_generation_state();
+    void remember_editor_gcode_generation_state(Inkscape::Axidraw::GrblExportParams const &params);
+    bool current_mapping_matches_editor_gcode_generation_state() const;
+    void update_editor_gcode_generation_state_status();
+    void handle_mapping_preferences_changed(bool refresh_preview);
+    void handle_editor_gcode_changed(bool generated_from_document = false);
     void update_page_restore_button();
     bool get_configured_bed_size_mm(double &bed_width_mm, double &bed_height_mm) const;
     bool prepare_document_bed_action(SPDocument *&doc, Geom::Rect &bounds, double &bed_w_doc, double &bed_h_doc,
                                      Glib::ustring &error, Glib::ustring const &empty_message) const;
-    SPPage *get_target_page(SPDocument *doc) const;
     void request_canvas_redraw() const;
-    void capture_page_restore_state(SPDocument *doc);
-    void clear_page_restore_state();
-    void apply_document_and_page_size_px(SPDocument *doc, double doc_width_px, double doc_height_px, double page_width_px,
-                                         double page_height_px);
-    bool sync_document_page_to_bed_mm(SPDocument *doc, double width_mm, double height_mm, bool &unit_synced_out);
-    enum class DocumentGeometryChange { sync_page_to_bed, fit_to_bed, center_to_bed, restore_page };
-    void finalize_document_geometry_change(SPDocument *doc, DocumentGeometryChange change, bool refresh_preview = true);
     bool has_plot_preview_enabled() const;
     bool build_document_preview_overlay(SPDocument *doc, SPDesktop *desktop,
                                         Inkscape::Axidraw::GrblExportParams const &params,
@@ -202,7 +195,7 @@ private:
                                     Geom::Affine const &affine);
     void schedule_plot_feedback_refresh(bool refresh_preview = true);
     void refresh_plot_feedback(bool refresh_preview = true);
-    bool begin_gcode_stream_ui(Glib::ustring const &status);
+    bool begin_gcode_stream_ui(GrblGcodeStartOrigin origin);
     void post_gcode_stream_result(std::string const &err);
     void join_gcode_stream_thread();
     void start_gcode_stream_thread(std::function<void()> work);
@@ -230,11 +223,10 @@ private:
     bool _suspend_mapping_sync{false};
     bool _plot_feedback_refresh_preview_requested{false};
     bool _plot_feedback_refresh_dispatch_pending{false};
-    bool _has_saved_page_restore{false};
-    double _saved_doc_width_px{0.0};
-    double _saved_doc_height_px{0.0};
-    double _saved_page_width_px{0.0};
-    double _saved_page_height_px{0.0};
+    bool _suspend_editor_gcode_tracking{false};
+    bool _editor_gcode_generation_state_warned_stale{false};
+    GrblPageRestoreState _page_restore_state;
+    EditorGcodeGenerationState _editor_gcode_generation_state;
 
     Gtk::Frame _frame;
     Gtk::Box _vbox{Gtk::Orientation::VERTICAL};

@@ -614,7 +614,9 @@ TEST_F(GrblExportTest, MachinePreviewReportsApproximationWhenClipped)
     EXPECT_TRUE(approximate_due_to_clip);
     ASSERT_EQ(preview.size(), 1);
     EXPECT_NEAR(preview.front().initialPoint()[Geom::X], 0.0, 1e-6);
-    EXPECT_NEAR(preview.front().finalPoint()[Geom::X], 15.0, 1e-6);
+    EXPECT_NEAR(preview.front().initialPoint()[Geom::Y], 37.7952755906, 1e-6);
+    EXPECT_NEAR(preview.front().finalPoint()[Geom::X], 56.6929133858, 1e-6);
+    EXPECT_NEAR(preview.front().finalPoint()[Geom::Y], 37.7952755906, 1e-6);
 }
 
 TEST_F(GrblExportTest, MapsViewBoxUserUnitsToPhysicalMillimetres)

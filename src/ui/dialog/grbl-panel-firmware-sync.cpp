@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "grbl-panel-firmware-sync.h"
+#include "grbl-panel-firmware-sync-state.h"
 
 #include <chrono>
-#include <cmath>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -11,8 +11,6 @@
 
 #include <glibmm/i18n.h>
 #include <glibmm/main.h>
-#include <gtkmm/checkbutton.h>
-#include <gtkmm/spinbutton.h>
 
 #include "axidraw/device/grbl-client.h"
 #include "axidraw/device/grbl-link.h"
@@ -52,24 +50,6 @@ bool parse_double_c(std::string const &text, double &value_out)
     } catch (...) {
         return false;
     }
-}
-
-bool update_check_if_needed(Gtk::CheckButton &button, bool const value)
-{
-    if (button.get_active() == value) {
-        return false;
-    }
-    button.set_active(value);
-    return true;
-}
-
-bool update_spin_if_needed(Gtk::SpinButton &spin, double const value, double const epsilon = 1e-6)
-{
-    if (std::abs(spin.get_value() - value) <= epsilon) {
-        return false;
-    }
-    spin.set_value(value);
-    return true;
 }
 
 Glib::ustring build_firmware_snapshot_text(std::vector<std::string> const &info_lines,
@@ -144,7 +124,7 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
     };
 
     auto query_lines_locked = [&context, &stop](std::string const &command, std::vector<std::string> &lines_out,
-                                                 std::string &err_out) -> bool {
+                                                std::string &err_out) -> bool {
         lines_out.clear();
         auto *link = context.link;
         if (stop.load(std::memory_order_acquire) || !(link && link->is_open())) {
@@ -177,10 +157,7 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
                 ++it;
             }
             line.erase(line.begin(), it);
-            if (line.empty()) {
-                continue;
-            }
-            if (line == command) {
+            if (line.empty() || line == command) {
                 continue;
             }
             if (line == "ok") {
@@ -218,13 +195,12 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         run_query("$#", offset_lines);
         run_query("$$", setting_lines);
 
-        if (info_lines.empty() && modal_lines.empty() && offset_lines.empty() && setting_lines.empty() && !stop.load(std::memory_order_acquire)) {
+        if (info_lines.empty() && modal_lines.empty() && offset_lines.empty() && setting_lines.empty() &&
+            !stop.load(std::memory_order_acquire)) {
             errors.clear();
 
             auto *link = context.link;
             if (link && link->is_open()) {
-                // Some Bluetooth GRBL variants only respond reliably after a soft reset,
-                // and then expose all useful metadata via `$$` and bracketed info lines.
                 char const ctrl_x = 0x18;
                 Inkscape::Axidraw::grbl_debug_log_write("firmware_sync", "\\x18");
                 if (link->write_bytes(&ctrl_x, 1)) {
@@ -296,52 +272,18 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
     }
 
     Glib::signal_idle().connect_once([context, snapshot] {
-        auto build_sync_status = [](GrblFirmwareSnapshot const &snapshot_in, bool page_synced_in, bool unit_synced_in) {
-            std::vector<Glib::ustring> notes;
-            if (snapshot_in.has_direction_mask) {
-                notes.emplace_back(Glib::ustring::compose(_("已同步方向反转掩码 $3=%1"), snapshot_in.direction_mask));
-            }
-            if (snapshot_in.has_x_travel || snapshot_in.has_y_travel) {
-                if (snapshot_in.has_x_travel && snapshot_in.has_y_travel) {
-                    notes.emplace_back(Glib::ustring::compose(_("已同步床面尺寸 X=%1 mm, Y=%2 mm"),
-                                                              snapshot_in.x_travel_mm, snapshot_in.y_travel_mm));
-                } else if (snapshot_in.has_x_travel) {
-                    notes.emplace_back(Glib::ustring::compose(_("已同步床面宽度 X=%1 mm"), snapshot_in.x_travel_mm));
-                } else {
-                    notes.emplace_back(Glib::ustring::compose(_("已同步床面深度 Y=%1 mm"), snapshot_in.y_travel_mm));
-                }
-            } else {
-                notes.emplace_back(_("未从固件读取到 $130 / $131 行程参数，因此没有同步页面尺寸。"));
-            }
-            if (page_synced_in) {
-                notes.emplace_back(
-                    Glib::ustring::compose(_("已将当前页面尺寸同步为 %1 x %2 mm"), snapshot_in.x_travel_mm, snapshot_in.y_travel_mm));
-            }
-            if (unit_synced_in) {
-                notes.emplace_back(_("已将文档单位同步为 mm"));
-            }
-            if (notes.empty()) {
-                return Glib::ustring(_("已读取固件参数。"));
-            }
-
-            std::ostringstream msg;
-            msg << _("已读取固件参数。");
-            for (auto const &note : notes) {
-                msg << "\n" << note.raw();
-            }
-            return Glib::ustring(msg.str());
-        };
-
         context.set_firmware_info_text(snapshot.display_text);
 
         auto const apply_result = context.apply_snapshot_to_ui(snapshot);
+        auto const ui_plan = make_grbl_firmware_sync_ui_plan(snapshot, apply_result);
 
-        if (apply_result.changed) {
+        if (ui_plan.save_mapping_preferences) {
             context.save_mapping_preferences(true);
-        } else {
+        }
+        if (ui_plan.schedule_plot_feedback_refresh) {
             context.schedule_plot_feedback_refresh(true);
         }
-        context.post_status(build_sync_status(snapshot, apply_result.page_synced, apply_result.unit_synced), false);
+        context.post_status(ui_plan.status, false);
     });
 }
 

@@ -52,6 +52,19 @@ constexpr double k_mm_per_in = 25.4;
 constexpr double k_px_per_in = 96.0;
 constexpr double k_mm_per_px = k_mm_per_in / k_px_per_in;
 constexpr double k_machine_coord_epsilon_mm = 1e-3;
+constexpr auto k_pref_clip_bed = "/options/grbl/clip-to-machine-bed";
+constexpr auto k_pref_clip_bed_migration_v1 = "/options/grbl/migrations/clip-to-machine-bed-default-v1";
+
+void migrate_clip_to_machine_bed_default(Inkscape::Preferences *prefs)
+{
+    if (!prefs || prefs->getEntry(k_pref_clip_bed_migration_v1).isSet()) {
+        return;
+    }
+
+    prefs->setBool(k_pref_clip_bed, true);
+    prefs->setBool(k_pref_clip_bed_migration_v1, true);
+    prefs->save();
+}
 
 bool emit_optional_dwell_ms(std::function<bool(std::string const &)> const &emit_line, double const delay_ms)
 {
@@ -63,32 +76,121 @@ bool emit_optional_dwell_ms(std::function<bool(std::string const &)> const &emit
     return emit_line(buf);
 }
 
+bool parse_svg_length_to_mm(char const *text, double &mm_out)
+{
+    if (!text) {
+        return false;
+    }
+
+    std::string value(text);
+    auto const first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return false;
+    }
+    auto const last = value.find_last_not_of(" \t\r\n");
+    value = value.substr(first, last - first + 1);
+
+    char *end = nullptr;
+    double const number = std::strtod(value.c_str(), &end);
+    if (!end || end == value.c_str()) {
+        return false;
+    }
+
+    std::string unit(end);
+    auto const unit_first = unit.find_first_not_of(" \t\r\n");
+    if (unit_first == std::string::npos) {
+        unit.clear();
+    } else {
+        auto const unit_last = unit.find_last_not_of(" \t\r\n");
+        unit = unit.substr(unit_first, unit_last - unit_first + 1);
+    }
+    for (auto &ch : unit) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+
+    double scale = 0.0;
+    if (unit.empty() || unit == "px") {
+        scale = k_mm_per_px;
+    } else if (unit == "mm") {
+        scale = 1.0;
+    } else if (unit == "cm") {
+        scale = 10.0;
+    } else if (unit == "in") {
+        scale = k_mm_per_in;
+    } else if (unit == "pt") {
+        scale = k_mm_per_in / 72.0;
+    } else if (unit == "pc") {
+        scale = k_mm_per_in / 6.0;
+    } else if (unit == "q") {
+        scale = 0.25;
+    } else {
+        return false;
+    }
+
+    mm_out = number * scale;
+    return true;
+}
+
+bool get_document_physical_size_mm(SPDocument *doc, double &width_mm, double &height_mm)
+{
+    width_mm = 0.0;
+    height_mm = 0.0;
+    if (!doc) {
+        return false;
+    }
+
+    if (auto *root = doc->getRoot()) {
+        double raw_width_mm = 0.0;
+        double raw_height_mm = 0.0;
+        if (parse_svg_length_to_mm(root->getAttribute("width"), raw_width_mm) &&
+            parse_svg_length_to_mm(root->getAttribute("height"), raw_height_mm) &&
+            raw_width_mm > 1e-9 && raw_height_mm > 1e-9) {
+            width_mm = raw_width_mm;
+            height_mm = raw_height_mm;
+            return true;
+        }
+
+        if (root->width.computed > 1e-9 && root->height.computed > 1e-9) {
+            width_mm = root->width.computed * k_mm_per_px;
+            height_mm = root->height.computed * k_mm_per_px;
+            return true;
+        }
+    }
+
+    auto const page_px = doc->getDimensions();
+    width_mm = page_px[Geom::X] * k_mm_per_px;
+    height_mm = page_px[Geom::Y] * k_mm_per_px;
+    return width_mm > 1e-9 && height_mm > 1e-9;
+}
+
 struct DocumentMmMapper {
-    double origin_x_doc = 0.0;
-    double origin_y_doc = 0.0;
-    double mm_per_doc_x = 0.0;
-    double mm_per_doc_y = 0.0;
+    double source_origin_x_doc = 0.0;
+    double source_origin_y_doc = 0.0;
+    double mm_per_source_doc_x = 0.0;
+    double mm_per_source_doc_y = 0.0;
+    double preview_doc_units_per_mm_x = 1.0 / k_mm_per_px;
+    double preview_doc_units_per_mm_y = 1.0 / k_mm_per_px;
 
     [[nodiscard]] bool valid() const
     {
-        return mm_per_doc_x > 0.0 && mm_per_doc_y > 0.0;
+        return mm_per_source_doc_x > 0.0 && mm_per_source_doc_y > 0.0;
     }
 
     [[nodiscard]] Geom::Point doc_to_mm(Geom::Point const &p) const
     {
-        return {(p[Geom::X] - origin_x_doc) * mm_per_doc_x,
-                (p[Geom::Y] - origin_y_doc) * mm_per_doc_y};
+        return {(p[Geom::X] - source_origin_x_doc) * mm_per_source_doc_x,
+                (p[Geom::Y] - source_origin_y_doc) * mm_per_source_doc_y};
     }
 
     [[nodiscard]] Geom::Point mm_to_doc(Geom::Point const &p) const
     {
-        return {origin_x_doc + p[Geom::X] / mm_per_doc_x,
-                origin_y_doc + p[Geom::Y] / mm_per_doc_y};
+        return {p[Geom::X] * preview_doc_units_per_mm_x,
+                p[Geom::Y] * preview_doc_units_per_mm_y};
     }
 
     [[nodiscard]] double avg_doc_units_per_mm() const
     {
-        return 0.5 * ((1.0 / mm_per_doc_x) + (1.0 / mm_per_doc_y));
+        return 0.5 * ((1.0 / mm_per_source_doc_x) + (1.0 / mm_per_source_doc_y));
     }
 };
 
@@ -100,25 +202,27 @@ DocumentMmMapper build_document_mm_mapper(SPDocument *doc)
     }
 
     auto const viewbox = doc->getViewBox();
-    auto const page_px = doc->getDimensions();
-    double const page_w_mm = page_px[Geom::X] * k_mm_per_px;
-    double const page_h_mm = page_px[Geom::Y] * k_mm_per_px;
+    double page_w_mm = 0.0;
+    double page_h_mm = 0.0;
+    if (!get_document_physical_size_mm(doc, page_w_mm, page_h_mm)) {
+        return mapper;
+    }
 
     if (viewbox.width() > 1e-9 && page_w_mm > 1e-9) {
-        mapper.origin_x_doc = viewbox.left();
-        mapper.mm_per_doc_x = page_w_mm / viewbox.width();
+        mapper.source_origin_x_doc = viewbox.left();
+        mapper.mm_per_source_doc_x = page_w_mm / viewbox.width();
     }
     if (viewbox.height() > 1e-9 && page_h_mm > 1e-9) {
-        mapper.origin_y_doc = viewbox.top();
-        mapper.mm_per_doc_y = page_h_mm / viewbox.height();
+        mapper.source_origin_y_doc = viewbox.top();
+        mapper.mm_per_source_doc_y = page_h_mm / viewbox.height();
     }
 
     if (!mapper.valid()) {
         double const px_to_mm = k_mm_per_px;
-        mapper.origin_x_doc = 0.0;
-        mapper.origin_y_doc = 0.0;
-        mapper.mm_per_doc_x = px_to_mm;
-        mapper.mm_per_doc_y = px_to_mm;
+        mapper.source_origin_x_doc = 0.0;
+        mapper.source_origin_y_doc = 0.0;
+        mapper.mm_per_source_doc_x = px_to_mm;
+        mapper.mm_per_source_doc_y = px_to_mm;
     }
 
     return mapper;
@@ -151,6 +255,43 @@ void append_stroke_from_path(Geom::Path const &pit, std::vector<std::vector<Geom
     }
 }
 
+Geom::Affine get_missing_root_viewbox_correction(SPDocument *doc)
+{
+    if (!doc) {
+        return Geom::identity();
+    }
+
+    auto *root = doc->getRoot();
+    if (!root || !root->viewBox_set || root->viewBox.width() <= 1e-9 || root->viewBox.height() <= 1e-9) {
+        return Geom::identity();
+    }
+
+    double page_w_mm = 0.0;
+    double page_h_mm = 0.0;
+    if (!get_document_physical_size_mm(doc, page_w_mm, page_h_mm)) {
+        return Geom::identity();
+    }
+    auto const scale = doc->getDocumentScale(true);
+    bool const needs_viewbox_transform =
+        std::abs(scale[Geom::X] - 1.0) > 1e-9 || std::abs(scale[Geom::Y] - 1.0) > 1e-9 ||
+        std::abs(root->viewBox.left()) > 1e-9 || std::abs(root->viewBox.top()) > 1e-9;
+    if (!needs_viewbox_transform) {
+        return Geom::identity();
+    }
+
+    auto const &c2p = root->c2p;
+    bool const root_c2p_is_identity =
+        std::abs(c2p[0] - 1.0) <= 1e-9 && std::abs(c2p[1]) <= 1e-9 &&
+        std::abs(c2p[2]) <= 1e-9 && std::abs(c2p[3] - 1.0) <= 1e-9 &&
+        std::abs(c2p[4]) <= 1e-9 && std::abs(c2p[5]) <= 1e-9;
+    if (!root_c2p_is_identity) {
+        return Geom::identity();
+    }
+
+    return Geom::Scale(scale[Geom::X], scale[Geom::Y]) *
+           Geom::Translate(-root->viewBox.left(), -root->viewBox.top());
+}
+
 void collect_shapes_recursive(SPObject *obj, double flatness, std::vector<std::vector<Geom::Point>> &strokes_doc)
 {
     if (!obj || is<SPDefs>(obj)) {
@@ -169,7 +310,7 @@ void collect_shapes_recursive(SPObject *obj, double flatness, std::vector<std::v
             if (!item) {
                 return;
             }
-            Geom::Affine const tf = item->i2doc_affine();
+            Geom::Affine const tf = item->i2doc_affine() * get_missing_root_viewbox_correction(shape->document);
             Geom::PathVector const pv = (*curve) * tf;
             Geom::PathVector const linear = pathv_to_linear(pv, flatness);
             for (auto const &pit : linear) {
@@ -463,10 +604,12 @@ std::string format_xy_mm(Geom::Point const &p_mm, char const *cmd, double feed)
 
 static double document_page_height_mm(SPDocument *doc)
 {
-    if (!doc) {
-        return 0;
+    double width_mm = 0.0;
+    double height_mm = 0.0;
+    if (!get_document_physical_size_mm(doc, width_mm, height_mm)) {
+        return 0.0;
     }
-    return doc->getDimensions()[Geom::Y] * k_mm_per_px;
+    return height_mm;
 }
 
 static void strokes_doc_to_mm(std::vector<std::vector<Geom::Point>> const &strokes_doc, DocumentMmMapper const &mapper,
@@ -1880,6 +2023,7 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     if (!prefs) {
         return;
     }
+    migrate_clip_to_machine_bed_default(prefs);
     constexpr auto k_flat = "/options/grbl/flatness";
     constexpr auto k_fd = "/options/grbl/feed-draw-mmmin";
     constexpr auto k_ft = "/options/grbl/feed-travel-mmmin";
@@ -1904,7 +2048,6 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     constexpr auto k_invert_x = "/options/grbl/invert-x";
     constexpr auto k_invert_y = "/options/grbl/invert-y";
     constexpr auto k_align = "/options/grbl/align-content-min";
-    constexpr auto k_clip = "/options/grbl/clip-to-machine-bed";
     constexpr auto k_bw = "/options/grbl/machine-bed-width-mm";
     constexpr auto k_bd = "/options/grbl/machine-bed-depth-mm";
     constexpr auto k_autopause = "/options/grbl/auto-pause-between-layers";
@@ -1951,7 +2094,7 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     params.invert_x = prefs->getBool(k_invert_x, false);
     params.invert_y = prefs->getBool(k_invert_y, false);
     params.align_content_min_to_origin = prefs->getBool(k_align, false);
-    params.clip_to_machine_bed = prefs->getBool(k_clip, false);
+    params.clip_to_machine_bed = prefs->getBool(k_pref_clip_bed, true);
     params.machine_bed_width_mm = prefs->getDoubleLimited(k_bw, 300.0, 1.0, 2000.0);
     params.machine_bed_depth_mm = prefs->getDoubleLimited(k_bd, 200.0, 1.0, 2000.0);
     bool const auto_pause_between_layers = prefs->getBool(k_autopause, false);

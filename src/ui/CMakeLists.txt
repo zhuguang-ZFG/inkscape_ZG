@@ -125,6 +125,24 @@ target_sources(inkscape_base PRIVATE
 	dialog/choose-file.cpp
 	dialog/debug.cpp
 	dialog/grbl-control-panel.cpp
+	dialog/grbl-panel-connect-attempt.cpp
+	dialog/grbl-panel-connection-state.cpp
+	dialog/grbl-panel-document-geometry.cpp
+	dialog/grbl-panel-document-layout.cpp
+	dialog/grbl-editor-gcode.cpp
+	dialog/grbl-editor-generation-state.cpp
+	dialog/grbl-panel-export-session.cpp
+	dialog/grbl-panel-feedback-state.cpp
+	dialog/grbl-panel-feedback-presentation.cpp
+	dialog/grbl-panel-summary-presentation.cpp
+	dialog/grbl-panel-firmware-sync-state.cpp
+	dialog/grbl-panel-mapping-mode.cpp
+	dialog/grbl-panel-job-guard.cpp
+	dialog/grbl-panel-mapping-prefs.cpp
+	dialog/grbl-panel-mapping-state.cpp
+	dialog/grbl-panel-presentation.cpp
+	dialog/grbl-panel-transport-state.cpp
+	dialog/grbl-runtime-state.cpp
 	dialog/grbl-panel-firmware-sync.cpp
 	dialog/grbl-panel-sender.cpp
 	dialog/grbl-panel-workers.cpp
@@ -360,6 +378,16 @@ target_sources(inkscape_base PRIVATE
 	dialog/about.h
 	dialog/align-and-distribute.h
 	dialog/arrange-tab.h
+	dialog/grbl-panel-connect-attempt.h
+	dialog/grbl-panel-connection-state.h
+	dialog/grbl-panel-document-geometry.h
+	dialog/grbl-panel-document-layout.h
+	dialog/grbl-panel-feedback-state.h
+	dialog/grbl-panel-feedback-presentation.h
+	dialog/grbl-panel-summary-presentation.h
+	dialog/grbl-panel-firmware-sync-state.h
+	dialog/grbl-panel-mapping-prefs.h
+	dialog/grbl-panel-mapping-state.h
 	dialog/calligraphic-profile-rename.h
 	dialog/choose-file.h
 	dialog/choose-file-utils.h
