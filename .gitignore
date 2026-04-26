@@ -73,3 +73,21 @@ tags
 
 # YCM code completer
 .ycm_*
+
+# Local ZG development noise
+/inkscape/
+/tmp/
+/COM*_Terminal.txt
+/COM*_session.cpm
+/list_files_pacman_temp.txt
+/user-data-dir.log
+/grbl-*.log
+/grbl-*.strace
+/gcc-*.log
+/ninja-*.log
+/tiny-*.log
+/tiny-*.strace
+/tiny.cpp
+/grbl-export-preprocessed.i
+/validate-grbl-export.cmd
+/start_inkscape_safe.bat
