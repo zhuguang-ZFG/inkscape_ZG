@@ -266,19 +266,6 @@ Inkscape::Axidraw::GrblExportParams make_export_params_from_preferences()
     return params;
 }
 
-void setup_summary_label(Gtk::Label &label, Glib::ustring const &initial_markup, int margin_top, int margin_bottom)
-{
-    label.set_halign(Gtk::Align::START);
-    label.set_wrap(true);
-    label.set_use_markup(true);
-    label.set_selectable(true);
-    label.set_xalign(0.0f);
-    label.add_css_class("monospace");
-    label.set_margin_top(margin_top);
-    label.set_margin_bottom(margin_bottom);
-    label.set_markup(initial_markup);
-}
-
 void set_layout_scale_summary_from_stats(Gtk::Label &label, Inkscape::Axidraw::GrblPlotStats const &stats,
                                          double bed_width_mm, double bed_height_mm)
 {
@@ -2590,7 +2577,15 @@ void GrblControlPanel::build_ui()
     _gcode_help.set_wrap(true);
     _gcode_help.set_halign(Gtk::Align::START);
     _gcode_help.set_margin_bottom(4);
-    setup_summary_label(_job_summary, _("<b>任务概览</b>\n尚未分析当前图稿。"), 4, 4);
+    _job_summary.set_halign(Gtk::Align::START);
+    _job_summary.set_wrap(true);
+    _job_summary.set_use_markup(true);
+    _job_summary.set_selectable(true);
+    _job_summary.set_xalign(0.0f);
+    _job_summary.add_css_class("monospace");
+    _job_summary.set_margin_top(4);
+    _job_summary.set_margin_bottom(4);
+    _job_summary.set_markup(_("<b>任务概览</b>\n尚未分析当前图稿。"));
     auto *job_summary_frame = Gtk::make_managed<Gtk::Frame>();
     job_summary_frame->set_label(_("任务概览"));
     job_summary_frame->set_child(_job_summary);
@@ -2750,7 +2745,15 @@ void GrblControlPanel::build_ui()
     top_actions->append(_btn_fit_to_bed);
     top_actions->append(_btn_center_to_bed);
     top_actions->append(_btn_restore_page_size);
-    setup_summary_label(_layout_scale_summary, _("<b>当前缩放</b>\n尚未分析当前图稿与机器行程。"), 2, 2);
+    _layout_scale_summary.set_halign(Gtk::Align::START);
+    _layout_scale_summary.set_wrap(true);
+    _layout_scale_summary.set_use_markup(true);
+    _layout_scale_summary.set_selectable(true);
+    _layout_scale_summary.set_xalign(0.0f);
+    _layout_scale_summary.add_css_class("monospace");
+    _layout_scale_summary.set_margin_top(2);
+    _layout_scale_summary.set_margin_bottom(2);
+    _layout_scale_summary.set_markup(_("<b>当前缩放</b>\n尚未分析当前图稿与机器行程。"));
     update_page_restore_button();
     Inkscape::UI::pack_start(*box_layout, *top_actions, false, false, 0);
     Inkscape::UI::pack_start(*box_layout, _layout_scale_summary, false, false, 0);
