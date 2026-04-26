@@ -59,9 +59,12 @@ struct GrblExportParams {
     /// Optional dwell after pen-up / pen-down commands to let the mechanism settle.
     double pen_up_delay_ms = 0.0;
     double pen_down_delay_ms = 0.0;
-    /// Extend the start/end of open strokes so pen-down / pen-up transitions happen outside the intended geometry.
-    bool enable_path_lead_in_out = false;
-    double lead_in_out_distance_mm = 0.0;
+    /// Extend the start of open strokes so pen-down transitions happen outside the intended geometry.
+    bool enable_path_lead_in = false;
+    double lead_in_distance_mm = 0.0;
+    /// Extend the end of open strokes so pen-up transitions happen outside the intended geometry.
+    bool enable_path_lead_out = false;
+    double lead_out_distance_mm = 0.0;
     /// Optional higher pen-up move used before long travel moves.
     bool enable_long_pen_up = false;
     double long_pen_up_mm = 10.0;

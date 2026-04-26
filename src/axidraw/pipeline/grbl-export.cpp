@@ -342,25 +342,32 @@ static Geom::Point extend_point_along_segment(Geom::Point const &anchor, Geom::P
     return anchor + (delta / length) * distance_mm;
 }
 
-static void apply_open_stroke_lead_in_out(std::vector<std::vector<Geom::Point>> &strokes, double const distance_mm)
+static void apply_open_stroke_lead_in_out(std::vector<std::vector<Geom::Point>> &strokes,
+                                          double const lead_in_distance_mm,
+                                          double const lead_out_distance_mm)
 {
-    if (!(distance_mm > 1e-9)) {
+    if (!(lead_in_distance_mm > 1e-9) && !(lead_out_distance_mm > 1e-9)) {
         return;
     }
     for (auto &stroke : strokes) {
         if (stroke.size() < 2 || stroke_is_closed_for_reorder(stroke)) {
             continue;
         }
-        stroke.front() = extend_point_along_segment(stroke.front(), stroke[1], distance_mm);
-        stroke.back() = extend_point_along_segment(stroke.back(), stroke[stroke.size() - 2], distance_mm);
+        if (lead_in_distance_mm > 1e-9) {
+            stroke.front() = extend_point_along_segment(stroke.front(), stroke[1], lead_in_distance_mm);
+        }
+        if (lead_out_distance_mm > 1e-9) {
+            stroke.back() = extend_point_along_segment(stroke.back(), stroke[stroke.size() - 2], lead_out_distance_mm);
+        }
     }
 }
 
 static void apply_open_stroke_lead_in_out_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers,
-                                                 double const distance_mm)
+                                                 double const lead_in_distance_mm,
+                                                 double const lead_out_distance_mm)
 {
     for (auto &layer : layers) {
-        apply_open_stroke_lead_in_out(layer, distance_mm);
+        apply_open_stroke_lead_in_out(layer, lead_in_distance_mm, lead_out_distance_mm);
     }
 }
 
@@ -1988,9 +1995,11 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
             }
             log_grbl_stage_stats_layers("layered", "optimized", "after-near-reorder", prep.layers_mm, prep.layer_tool_ids, params);
             log_grbl_stage_stats_layers("layered", "baseline", "after-near-reorder", layers_mm_baseline, prep.layer_tool_ids, params);
-            if (params.enable_path_lead_in_out) {
-                apply_open_stroke_lead_in_out_layers(prep.layers_mm, params.lead_in_out_distance_mm);
-                apply_open_stroke_lead_in_out_layers(layers_mm_baseline, params.lead_in_out_distance_mm);
+            if (params.enable_path_lead_in || params.enable_path_lead_out) {
+                apply_open_stroke_lead_in_out_layers(prep.layers_mm, params.lead_in_distance_mm,
+                                                     params.lead_out_distance_mm);
+                apply_open_stroke_lead_in_out_layers(layers_mm_baseline, params.lead_in_distance_mm,
+                                                     params.lead_out_distance_mm);
             }
             log_grbl_stage_stats_layers("layered", "optimized", "after-lead", prep.layers_mm, prep.layer_tool_ids, params);
             log_grbl_stage_stats_layers("layered", "baseline", "after-lead", layers_mm_baseline, prep.layer_tool_ids, params);
@@ -2115,9 +2124,9 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     }
     log_grbl_stage_stats("flat", "optimized", "after-near-reorder", prep.flat_mm, params);
     log_grbl_stage_stats("flat", "baseline", "after-near-reorder", flat_mm_baseline, params);
-    if (params.enable_path_lead_in_out) {
-        apply_open_stroke_lead_in_out(prep.flat_mm, params.lead_in_out_distance_mm);
-        apply_open_stroke_lead_in_out(flat_mm_baseline, params.lead_in_out_distance_mm);
+    if (params.enable_path_lead_in || params.enable_path_lead_out) {
+        apply_open_stroke_lead_in_out(prep.flat_mm, params.lead_in_distance_mm, params.lead_out_distance_mm);
+        apply_open_stroke_lead_in_out(flat_mm_baseline, params.lead_in_distance_mm, params.lead_out_distance_mm);
     }
     log_grbl_stage_stats("flat", "optimized", "after-lead", prep.flat_mm, params);
     log_grbl_stage_stats("flat", "baseline", "after-lead", flat_mm_baseline, params);
@@ -2641,6 +2650,10 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     constexpr auto k_pen_dn = "/options/grbl/pen-down-cmd";
     constexpr auto k_pen_up_delay = "/options/grbl/pen-up-delay-ms";
     constexpr auto k_pen_down_delay = "/options/grbl/pen-down-delay-ms";
+    constexpr auto k_lead_in = "/options/grbl/enable-path-lead-in";
+    constexpr auto k_lead_in_dist = "/options/grbl/path-lead-in-distance-mm";
+    constexpr auto k_lead_out = "/options/grbl/enable-path-lead-out";
+    constexpr auto k_lead_out_dist = "/options/grbl/path-lead-out-distance-mm";
     constexpr auto k_lead_in_out = "/options/grbl/enable-path-lead-in-out";
     constexpr auto k_lead_in_out_dist = "/options/grbl/path-lead-in-out-distance-mm";
     constexpr auto k_pen_ctl = "/options/grbl/pen-control";
@@ -2692,8 +2705,12 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     }
     params.pen_up_delay_ms = prefs->getDoubleLimited(k_pen_up_delay, 0.0, 0.0, 5000.0);
     params.pen_down_delay_ms = prefs->getDoubleLimited(k_pen_down_delay, 0.0, 0.0, 5000.0);
-    params.enable_path_lead_in_out = prefs->getBool(k_lead_in_out, false);
-    params.lead_in_out_distance_mm = prefs->getDoubleLimited(k_lead_in_out_dist, 0.0, 0.0, 1000.0);
+    auto const legacy_lead_enabled = prefs->getBool(k_lead_in_out, false);
+    auto const legacy_lead_distance_mm = prefs->getDoubleLimited(k_lead_in_out_dist, 0.0, 0.0, 1000.0);
+    params.enable_path_lead_in = prefs->getBool(k_lead_in, legacy_lead_enabled);
+    params.lead_in_distance_mm = prefs->getDoubleLimited(k_lead_in_dist, legacy_lead_distance_mm, 0.0, 1000.0);
+    params.enable_path_lead_out = prefs->getBool(k_lead_out, legacy_lead_enabled);
+    params.lead_out_distance_mm = prefs->getDoubleLimited(k_lead_out_dist, legacy_lead_distance_mm, 0.0, 1000.0);
     params.long_pen_up_mm = prefs->getDoubleLimited(k_long_pen_up_mm, 10.0, -1000.0, 1000.0);
     params.long_move_distance_mm = prefs->getDoubleLimited(k_long_move_dist, 20.0, 0.0, 100000.0);
     params.enable_near_connect = prefs->getBool(k_near_connect, false);

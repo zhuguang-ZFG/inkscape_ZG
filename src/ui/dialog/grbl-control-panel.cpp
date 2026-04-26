@@ -323,7 +323,8 @@ GrblControlPanel::GrblControlPanel()
     , _chk_flip_y(_("按页面高度镜像 Y"))
     , _chk_align_origin(_("左下角对齐到机器原点"))
     , _chk_clip_bed(_("限制在机器床面内"))
-    , _chk_lead_in_out(_("开放路径首尾延伸"))
+    , _chk_lead_in(_("开放路径起笔延伸"))
+    , _chk_lead_out(_("开放路径收笔延伸"))
     , _chk_long_pen_up(_("长距离空走时高抬笔"))
     , _chk_near_connect(_("近距离自动连笔"))
     , _chk_sparse_sampling(_("排线抽稀"))
@@ -439,8 +440,8 @@ void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_inter
     auto const manual_mode = _tool_change_mode_combo.get_active_id() == k_tool_change_mode_manual;
     auto const m6_mode = _tool_change_mode_combo.get_active_id() == k_tool_change_mode_m6;
     auto const state = make_grbl_panel_mapping_sensitivity(
-        allow_interaction, _chk_clip_bed.get_active(), _chk_lead_in_out.get_active(), _chk_long_pen_up.get_active(),
-        _chk_near_connect.get_active(), _chk_sparse_sampling.get_active(), manual_mode, m6_mode,
+        allow_interaction, _chk_clip_bed.get_active(), _chk_lead_in.get_active(), _chk_lead_out.get_active(),
+        _chk_long_pen_up.get_active(), _chk_near_connect.get_active(), _chk_sparse_sampling.get_active(), manual_mode, m6_mode,
         _chk_tool_change_point.get_active());
     _chk_swap_xy.set_sensitive(state.swap_xy);
     _chk_invert_x.set_sensitive(state.invert_x);
@@ -448,7 +449,8 @@ void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_inter
     _chk_flip_y.set_sensitive(state.flip_y);
     _chk_align_origin.set_sensitive(state.align_origin);
     _chk_clip_bed.set_sensitive(state.clip_bed);
-    _chk_lead_in_out.set_sensitive(state.lead_in_out);
+    _chk_lead_in.set_sensitive(state.lead_in);
+    _chk_lead_out.set_sensitive(state.lead_out);
     _chk_long_pen_up.set_sensitive(state.long_pen_up);
     _chk_near_connect.set_sensitive(state.near_connect);
     _chk_sparse_sampling.set_sensitive(state.sparse_sampling);
@@ -457,7 +459,8 @@ void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_inter
     _travel_feed_spin.set_sensitive(state.travel_feed);
     _pen_up_delay_spin.set_sensitive(state.pen_up_delay);
     _pen_down_delay_spin.set_sensitive(state.pen_down_delay);
-    _lead_in_out_dist_spin.set_sensitive(state.lead_in_out_dist);
+    _lead_in_dist_spin.set_sensitive(state.lead_in_dist);
+    _lead_out_dist_spin.set_sensitive(state.lead_out_dist);
     _pen_up_cmd_entry.set_sensitive(state.pen_up_cmd);
     _pen_down_cmd_entry.set_sensitive(state.pen_down_cmd);
     _chk_manual_pen_change_to_home.set_sensitive(state.manual_pen_change_to_home);
@@ -914,7 +917,8 @@ void GrblControlPanel::apply_mapping_preferences_to_ui(GrblPanelMappingPrefs con
     _chk_flip_y.set_active(values.flip_y);
     _chk_align_origin.set_active(values.align_origin);
     _chk_clip_bed.set_active(values.clip_bed);
-    _chk_lead_in_out.set_active(values.lead_in_out);
+    _chk_lead_in.set_active(values.lead_in);
+    _chk_lead_out.set_active(values.lead_out);
     _chk_long_pen_up.set_active(values.long_pen_up);
     _chk_near_connect.set_active(values.near_connect);
     _chk_sparse_sampling.set_active(values.sparse_sampling);
@@ -927,7 +931,8 @@ void GrblControlPanel::apply_mapping_preferences_to_ui(GrblPanelMappingPrefs con
     _travel_feed_spin.set_value(values.travel_feed);
     _pen_up_delay_spin.set_value(values.pen_up_delay);
     _pen_down_delay_spin.set_value(values.pen_down_delay);
-    _lead_in_out_dist_spin.set_value(values.lead_in_out_dist);
+    _lead_in_dist_spin.set_value(values.lead_in_dist);
+    _lead_out_dist_spin.set_value(values.lead_out_dist);
     _pen_up_cmd_entry.set_text(values.pen_up_cmd);
     _pen_down_cmd_entry.set_text(values.pen_down_cmd);
     _bed_width_spin.set_value(values.bed_width);
@@ -956,7 +961,8 @@ GrblPanelMappingPrefs GrblControlPanel::read_mapping_preferences_from_ui() const
     values.flip_y = _chk_flip_y.get_active();
     values.align_origin = _chk_align_origin.get_active();
     values.clip_bed = _chk_clip_bed.get_active();
-    values.lead_in_out = _chk_lead_in_out.get_active();
+    values.lead_in = _chk_lead_in.get_active();
+    values.lead_out = _chk_lead_out.get_active();
     values.long_pen_up = _chk_long_pen_up.get_active();
     values.near_connect = _chk_near_connect.get_active();
     values.sparse_sampling = _chk_sparse_sampling.get_active();
@@ -967,7 +973,8 @@ GrblPanelMappingPrefs GrblControlPanel::read_mapping_preferences_from_ui() const
     values.travel_feed = _travel_feed_spin.get_value();
     values.pen_up_delay = _pen_up_delay_spin.get_value();
     values.pen_down_delay = _pen_down_delay_spin.get_value();
-    values.lead_in_out_dist = _lead_in_out_dist_spin.get_value();
+    values.lead_in_dist = _lead_in_dist_spin.get_value();
+    values.lead_out_dist = _lead_out_dist_spin.get_value();
     values.pen_up_cmd = _pen_up_cmd_entry.get_text();
     values.pen_down_cmd = _pen_down_cmd_entry.get_text();
     values.bed_width = _bed_width_spin.get_value();
@@ -1028,7 +1035,8 @@ void GrblControlPanel::connect_mapping_preference_signals()
     connect_refreshing(_chk_flip_y, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_align_origin, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_clip_bed, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_lead_in_out, &Gtk::CheckButton::signal_toggled);
+    connect_refreshing(_chk_lead_in, &Gtk::CheckButton::signal_toggled);
+    connect_refreshing(_chk_lead_out, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_long_pen_up, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_near_connect, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_sparse_sampling, &Gtk::CheckButton::signal_toggled);
@@ -1039,7 +1047,8 @@ void GrblControlPanel::connect_mapping_preference_signals()
     connect_refreshing(_travel_feed_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_pen_up_delay_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_pen_down_delay_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_lead_in_out_dist_spin, &Gtk::SpinButton::signal_value_changed);
+    connect_refreshing(_lead_in_dist_spin, &Gtk::SpinButton::signal_value_changed);
+    connect_refreshing(_lead_out_dist_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_pen_up_cmd_entry, &Gtk::Entry::signal_changed);
     connect_refreshing(_pen_down_cmd_entry, &Gtk::Entry::signal_changed);
     connect_refreshing(_bed_width_spin, &Gtk::SpinButton::signal_value_changed);
@@ -2509,11 +2518,16 @@ void GrblControlPanel::build_ui()
     _pen_down_delay_spin.set_range(0.0, 5000.0);
     _pen_down_delay_spin.set_increments(10.0, 100.0);
     _pen_down_delay_spin.set_tooltip_text(_("每次落笔后等待这么多毫秒，再开始画线。适合落笔后需要稳定时间。"));
-    _chk_lead_in_out.set_tooltip_text(_("参考 GRBL-Plotter 的 lead-in/lead-out：对开放路径在起笔前和收笔后各延伸一小段，把落笔/抬笔过渡尽量放到图形外。它会改动开放路径的首尾几何，不是纯路径排序。"));
-    _lead_in_out_dist_spin.set_digits(2);
-    _lead_in_out_dist_spin.set_range(0.0, 1000.0);
-    _lead_in_out_dist_spin.set_increments(0.05, 0.5);
-    _lead_in_out_dist_spin.set_tooltip_text(_("开放路径首尾各延伸的距离。单位 mm；闭合轮廓不会应用。"));
+    _chk_lead_in.set_tooltip_text(_("参考 GRBL-Plotter 的 lead-in：对开放路径在起笔前延伸一小段，把落笔过渡尽量放到图形外。它会改动开放路径的首端几何，不是纯路径排序。"));
+    _chk_lead_out.set_tooltip_text(_("参考 GRBL-Plotter 的 lead-out：对开放路径在收笔后延伸一小段，把抬笔过渡尽量放到图形外。它会改动开放路径的末端几何，不是纯路径排序。"));
+    _lead_in_dist_spin.set_digits(2);
+    _lead_in_dist_spin.set_range(0.0, 1000.0);
+    _lead_in_dist_spin.set_increments(0.05, 0.5);
+    _lead_in_dist_spin.set_tooltip_text(_("开放路径起笔前延伸的距离。单位 mm；闭合轮廓不会应用。"));
+    _lead_out_dist_spin.set_digits(2);
+    _lead_out_dist_spin.set_range(0.0, 1000.0);
+    _lead_out_dist_spin.set_increments(0.05, 0.5);
+    _lead_out_dist_spin.set_tooltip_text(_("开放路径收笔后延伸的距离。单位 mm；闭合轮廓不会应用。"));
     _pen_up_cmd_entry.set_placeholder_text(_("例如：G1 Z0 F3000"));
     _pen_up_cmd_entry.set_tooltip_text(_("抬笔命令。Z 速度也在这里改，例如把 F3000 改成更慢或更快。"));
     _pen_down_cmd_entry.set_placeholder_text(_("例如：G1 Z5 F3000"));
@@ -2595,20 +2609,24 @@ void GrblControlPanel::build_ui()
     auto *lbl_near_connect = Gtk::make_managed<Gtk::Label>(_("连笔距离(mm)"), Gtk::Align::START);
     job_tuning_grid->attach(*lbl_near_connect, 1, 0, 1, 1);
     job_tuning_grid->attach(_near_connect_dist_spin, 2, 0, 1, 1);
-    job_tuning_grid->attach(_chk_lead_in_out, 0, 1, 1, 1);
-    auto *lbl_lead_in_out = Gtk::make_managed<Gtk::Label>(_("延伸距离(mm)"), Gtk::Align::START);
-    job_tuning_grid->attach(*lbl_lead_in_out, 1, 1, 1, 1);
-    job_tuning_grid->attach(_lead_in_out_dist_spin, 2, 1, 1, 1);
-    job_tuning_grid->attach(_chk_sparse_sampling, 0, 2, 1, 1);
+    job_tuning_grid->attach(_chk_lead_in, 0, 1, 1, 1);
+    auto *lbl_lead_in = Gtk::make_managed<Gtk::Label>(_("起笔距离(mm)"), Gtk::Align::START);
+    job_tuning_grid->attach(*lbl_lead_in, 1, 1, 1, 1);
+    job_tuning_grid->attach(_lead_in_dist_spin, 2, 1, 1, 1);
+    job_tuning_grid->attach(_chk_lead_out, 0, 2, 1, 1);
+    auto *lbl_lead_out = Gtk::make_managed<Gtk::Label>(_("收笔距离(mm)"), Gtk::Align::START);
+    job_tuning_grid->attach(*lbl_lead_out, 1, 2, 1, 1);
+    job_tuning_grid->attach(_lead_out_dist_spin, 2, 2, 1, 1);
+    job_tuning_grid->attach(_chk_sparse_sampling, 0, 3, 1, 1);
     auto *lbl_sparse_sampling = Gtk::make_managed<Gtk::Label>(_("每隔 N 条留 1 条"), Gtk::Align::START);
-    job_tuning_grid->attach(*lbl_sparse_sampling, 1, 2, 1, 1);
-    job_tuning_grid->attach(_sparse_keep_every_spin, 2, 2, 1, 1);
+    job_tuning_grid->attach(*lbl_sparse_sampling, 1, 3, 1, 1);
+    job_tuning_grid->attach(_sparse_keep_every_spin, 2, 3, 1, 1);
     auto *lbl_tool_change_mode = Gtk::make_managed<Gtk::Label>(_("换笔模式"), Gtk::Align::START);
-    job_tuning_grid->attach(*lbl_tool_change_mode, 0, 3, 1, 1);
-    job_tuning_grid->attach(_tool_change_mode_combo, 1, 3, 2, 1);
-    job_tuning_grid->attach(_chk_manual_pen_change_to_home, 0, 4, 2, 1);
-    job_tuning_grid->attach(_chk_manual_pen_change_prompt, 0, 5, 2, 1);
-    job_tuning_grid->attach(_chk_tool_change_point, 0, 6, 1, 1);
+    job_tuning_grid->attach(*lbl_tool_change_mode, 0, 4, 1, 1);
+    job_tuning_grid->attach(_tool_change_mode_combo, 1, 4, 2, 1);
+    job_tuning_grid->attach(_chk_manual_pen_change_to_home, 0, 5, 2, 1);
+    job_tuning_grid->attach(_chk_manual_pen_change_prompt, 0, 6, 2, 1);
+    job_tuning_grid->attach(_chk_tool_change_point, 0, 7, 1, 1);
     auto *tool_change_xy_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
     auto *lbl_tool_change_x = Gtk::make_managed<Gtk::Label>(_("X(mm)"), Gtk::Align::START);
     auto *lbl_tool_change_y = Gtk::make_managed<Gtk::Label>(_("Y(mm)"), Gtk::Align::START);
@@ -2616,7 +2634,7 @@ void GrblControlPanel::build_ui()
     tool_change_xy_box->append(_tool_change_x_spin);
     tool_change_xy_box->append(*lbl_tool_change_y);
     tool_change_xy_box->append(_tool_change_y_spin);
-    job_tuning_grid->attach(*tool_change_xy_box, 1, 6, 2, 1);
+    job_tuning_grid->attach(*tool_change_xy_box, 1, 7, 2, 1);
     auto *job_tuning_hint = Gtk::make_managed<Gtk::Label>(
         _("<small>“近距离自动连笔”会把非常接近的相邻笔画合并成连续路径，减少抬笔和空走，但也会真的画出连接线。适合绘图机轮廓、描边类任务；如果不希望出现桥接线，请关闭。"
           "“排线抽稀”适合规则排线、阴影线、Sparse 图，按当前笔画顺序隔线保留，可显著减少发黑和总时长。"
