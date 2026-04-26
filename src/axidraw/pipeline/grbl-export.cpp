@@ -7,13 +7,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <iomanip>
 #include <iterator>
 #include <limits>
 #include <list>
 #include <regex>
 #include <sstream>
+#include <unordered_map>
 #include <vector>
 
 #include <2geom/path.h>
@@ -324,6 +327,106 @@ void collect_shapes_recursive(SPObject *obj, double flatness, std::vector<std::v
     }
 }
 
+static bool stroke_is_closed_for_reorder(std::vector<Geom::Point> const &stroke)
+{
+    return stroke.size() >= 4 && Geom::are_near(stroke.front(), stroke.back(), 1e-9);
+}
+
+static Geom::Point extend_point_along_segment(Geom::Point const &anchor, Geom::Point const &other, double const distance_mm)
+{
+    auto const delta = anchor - other;
+    double const length = Geom::L2(delta);
+    if (!(length > 1e-9) || !(distance_mm > 1e-9)) {
+        return anchor;
+    }
+    return anchor + (delta / length) * distance_mm;
+}
+
+static void apply_open_stroke_lead_in_out(std::vector<std::vector<Geom::Point>> &strokes, double const distance_mm)
+{
+    if (!(distance_mm > 1e-9)) {
+        return;
+    }
+    for (auto &stroke : strokes) {
+        if (stroke.size() < 2 || stroke_is_closed_for_reorder(stroke)) {
+            continue;
+        }
+        stroke.front() = extend_point_along_segment(stroke.front(), stroke[1], distance_mm);
+        stroke.back() = extend_point_along_segment(stroke.back(), stroke[stroke.size() - 2], distance_mm);
+    }
+}
+
+static void apply_open_stroke_lead_in_out_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers,
+                                                 double const distance_mm)
+{
+    for (auto &layer : layers) {
+        apply_open_stroke_lead_in_out(layer, distance_mm);
+    }
+}
+
+static void rotate_closed_stroke_start(std::vector<Geom::Point> &stroke, std::size_t start_index)
+{
+    if (!stroke_is_closed_for_reorder(stroke)) {
+        return;
+    }
+
+    auto const unique_count = stroke.size() - 1;
+    if (unique_count < 3 || start_index == 0 || start_index >= unique_count) {
+        return;
+    }
+
+    std::vector<Geom::Point> rotated;
+    rotated.reserve(stroke.size());
+    rotated.insert(rotated.end(), stroke.begin() + start_index, stroke.begin() + unique_count);
+    rotated.insert(rotated.end(), stroke.begin(), stroke.begin() + start_index);
+    rotated.push_back(rotated.front());
+    stroke = std::move(rotated);
+}
+
+static void rotate_closed_stroke_start_near(std::vector<Geom::Point> &stroke, Geom::Point const &target)
+{
+    if (!stroke_is_closed_for_reorder(stroke)) {
+        return;
+    }
+
+    auto const unique_count = stroke.size() - 1;
+    std::size_t best_index = 0;
+    double best_distance = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < unique_count; ++i) {
+        double const d = Geom::L2(stroke[i] - target);
+        if (d < best_distance) {
+            best_distance = d;
+            best_index = i;
+        }
+    }
+
+    rotate_closed_stroke_start(stroke, best_index);
+}
+
+static void rotate_closed_stroke_start_between(std::vector<Geom::Point> &stroke, Geom::Point const &prev_end,
+                                               Geom::Point const *next_start)
+{
+    if (!stroke_is_closed_for_reorder(stroke)) {
+        return;
+    }
+
+    auto const unique_count = stroke.size() - 1;
+    std::size_t best_index = 0;
+    double best_cost = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < unique_count; ++i) {
+        double cost = Geom::L2(stroke[i] - prev_end);
+        if (next_start) {
+            cost += Geom::L2(stroke[i] - *next_start);
+        }
+        if (cost < best_cost) {
+            best_cost = cost;
+            best_index = i;
+        }
+    }
+
+    rotate_closed_stroke_start(stroke, best_index);
+}
+
 static void reorder_strokes_nearest_neighbor(std::vector<std::vector<Geom::Point>> &strokes, bool allow_reverse)
 {
     strokes.erase(std::remove_if(strokes.begin(), strokes.end(),
@@ -363,6 +466,7 @@ static void reorder_strokes_nearest_neighbor(std::vector<std::vector<Geom::Point
             Geom::L2(strokes[best].back() - pos) < Geom::L2(strokes[best].front() - pos)) {
             std::reverse(strokes[best].begin(), strokes[best].end());
         }
+        rotate_closed_stroke_start_near(strokes[best], pos);
         out.push_back(std::move(strokes[best]));
         if (!out.back().empty()) {
             pos = out.back().back();
@@ -390,6 +494,8 @@ static void reorder_strokes_nearest_neighbor(std::vector<std::vector<Geom::Point
                 Geom::Point const prev_end = (i == 0) ? origin : strokes[i - 1].back();
                 bool const has_next = (i + 1) < strokes.size();
                 Geom::Point const next_start = has_next ? strokes[i + 1].front() : cur.back();
+
+                rotate_closed_stroke_start_between(cur, prev_end, has_next ? &next_start : nullptr);
 
                 double const keep_cost = dist(prev_end, cur.front()) + (has_next ? dist(cur.back(), next_start) : 0.0);
                 double const rev_cost = dist(prev_end, cur.back()) + (has_next ? dist(cur.front(), next_start) : 0.0);
@@ -465,6 +571,27 @@ static void reorder_strokes_nearest_neighbor(std::vector<std::vector<Geom::Point
             if (!any_change) {
                 break;
             }
+        }
+    }
+
+    for (std::size_t i = 0; i < strokes.size(); ++i) {
+        auto &cur = strokes[i];
+        if (cur.size() < 2) {
+            continue;
+        }
+        Geom::Point const prev_end = (i == 0) ? origin : strokes[i - 1].back();
+        bool const has_next = (i + 1) < strokes.size();
+        Geom::Point const next_start = has_next ? strokes[i + 1].front() : cur.back();
+        rotate_closed_stroke_start_between(cur, prev_end, has_next ? &next_start : nullptr);
+    }
+}
+
+static void reorder_strokes_layers_nearest_neighbor(std::vector<std::vector<std::vector<Geom::Point>>> &layers,
+                                                    bool allow_reverse)
+{
+    for (auto &layer : layers) {
+        if (layer.size() > 1) {
+            reorder_strokes_nearest_neighbor(layer, allow_reverse);
         }
     }
 }
@@ -827,33 +954,203 @@ static void connect_nearby_strokes(std::vector<std::vector<Geom::Point>> &stroke
         return;
     }
 
+    struct EndpointRef {
+        std::size_t stroke_index = 0;
+        bool at_front = true;
+        Geom::Point point;
+    };
+
+    struct CandidateEdge {
+        int endpoint_a = -1;
+        int endpoint_b = -1;
+        double gap = 0.0;
+    };
+
+    struct Chain {
+        bool active = true;
+        std::vector<std::size_t> member_indices;
+        std::vector<std::vector<Geom::Point>> pieces;
+        int front_endpoint = -1;
+        int back_endpoint = -1;
+    };
+
+    auto reverse_chain = [](Chain &chain) {
+        std::reverse(chain.pieces.begin(), chain.pieces.end());
+        for (auto &piece : chain.pieces) {
+            std::reverse(piece.begin(), piece.end());
+        }
+        std::swap(chain.front_endpoint, chain.back_endpoint);
+    };
+
+    auto append_piece = [](std::vector<std::vector<Geom::Point>> &dst, std::vector<Geom::Point> src) {
+        if (src.size() < 2) {
+            return;
+        }
+        if (!dst.empty() && !dst.back().empty() && Geom::are_near(dst.back().back(), src.front(), 1e-9)) {
+            src.erase(src.begin());
+        }
+        if (src.size() >= 2) {
+            dst.push_back(std::move(src));
+        }
+    };
+
+    std::vector<std::vector<Geom::Point>> filtered;
+    filtered.reserve(strokes.size());
+    for (auto &stroke : strokes) {
+        if (stroke.size() >= 2) {
+            filtered.push_back(std::move(stroke));
+        }
+    }
+    if (filtered.size() < 2) {
+        strokes = std::move(filtered);
+        return;
+    }
+
+    std::vector<EndpointRef> endpoints;
+    endpoints.reserve(filtered.size() * 2);
+    for (std::size_t i = 0; i < filtered.size(); ++i) {
+        endpoints.push_back(EndpointRef{i, true, filtered[i].front()});
+        endpoints.push_back(EndpointRef{i, false, filtered[i].back()});
+    }
+
+    auto const endpoint_id = [](std::size_t stroke_index, bool at_front) {
+        return static_cast<int>(stroke_index * 2 + (at_front ? 0 : 1));
+    };
+
+    double const cell_size = near_dist_mm;
+    auto const cell_key = [cell_size](Geom::Point const &pt) {
+        long long const gx = static_cast<long long>(std::floor(pt[Geom::X] / cell_size));
+        long long const gy = static_cast<long long>(std::floor(pt[Geom::Y] / cell_size));
+        return std::pair<long long, long long>(gx, gy);
+    };
+
+    struct PairHash {
+        std::size_t operator()(std::pair<long long, long long> const &p) const
+        {
+            auto const hx = std::hash<long long>{}(p.first);
+            auto const hy = std::hash<long long>{}(p.second);
+            return hx ^ (hy + 0x9e3779b97f4a7c15ULL + (hx << 6) + (hx >> 2));
+        }
+    };
+
+    std::unordered_map<std::pair<long long, long long>, std::vector<int>, PairHash> grid;
+    grid.reserve(endpoints.size() * 2);
+    for (int id = 0; id < static_cast<int>(endpoints.size()); ++id) {
+        grid[cell_key(endpoints[id].point)].push_back(id);
+    }
+
+    std::vector<CandidateEdge> edges;
+    for (int a = 0; a < static_cast<int>(endpoints.size()); ++a) {
+        auto const [gx, gy] = cell_key(endpoints[a].point);
+        for (long long dx = -1; dx <= 1; ++dx) {
+            for (long long dy = -1; dy <= 1; ++dy) {
+                auto it = grid.find({gx + dx, gy + dy});
+                if (it == grid.end()) {
+                    continue;
+                }
+                for (int b : it->second) {
+                    if (b <= a) {
+                        continue;
+                    }
+                    if (endpoints[a].stroke_index == endpoints[b].stroke_index) {
+                        continue;
+                    }
+                    double const gap = Geom::L2(endpoints[a].point - endpoints[b].point);
+                    if (gap <= near_dist_mm) {
+                        edges.push_back(CandidateEdge{a, b, gap});
+                    }
+                }
+            }
+        }
+    }
+
+    if (edges.empty()) {
+        strokes = std::move(filtered);
+        return;
+    }
+
+    std::stable_sort(edges.begin(), edges.end(), [](CandidateEdge const &a, CandidateEdge const &b) {
+        return a.gap < b.gap;
+    });
+
+    std::vector<Chain> chains(filtered.size());
+    std::vector<std::size_t> stroke_to_chain(filtered.size());
+    for (std::size_t i = 0; i < filtered.size(); ++i) {
+        chains[i].member_indices.push_back(i);
+        chains[i].pieces.push_back(std::move(filtered[i]));
+        chains[i].front_endpoint = endpoint_id(i, true);
+        chains[i].back_endpoint = endpoint_id(i, false);
+        stroke_to_chain[i] = i;
+    }
+
+    for (auto const &edge : edges) {
+        auto const &end_a = endpoints[edge.endpoint_a];
+        auto const &end_b = endpoints[edge.endpoint_b];
+        std::size_t const chain_a_id = stroke_to_chain[end_a.stroke_index];
+        std::size_t const chain_b_id = stroke_to_chain[end_b.stroke_index];
+        if (chain_a_id == chain_b_id) {
+            continue;
+        }
+
+        auto &chain_a = chains[chain_a_id];
+        auto &chain_b = chains[chain_b_id];
+        if (!chain_a.active || !chain_b.active) {
+            continue;
+        }
+
+        bool const a_is_exposed = edge.endpoint_a == chain_a.front_endpoint || edge.endpoint_a == chain_a.back_endpoint;
+        bool const b_is_exposed = edge.endpoint_b == chain_b.front_endpoint || edge.endpoint_b == chain_b.back_endpoint;
+        if (!a_is_exposed || !b_is_exposed) {
+            continue;
+        }
+
+        if (edge.endpoint_a == chain_a.front_endpoint) {
+            reverse_chain(chain_a);
+        }
+        if (edge.endpoint_b == chain_b.back_endpoint) {
+            reverse_chain(chain_b);
+        }
+
+        if (edge.endpoint_a != chain_a.back_endpoint || edge.endpoint_b != chain_b.front_endpoint) {
+            continue;
+        }
+
+        for (auto &piece : chain_b.pieces) {
+            append_piece(chain_a.pieces, std::move(piece));
+        }
+        chain_a.back_endpoint = chain_b.back_endpoint;
+
+        for (auto member : chain_b.member_indices) {
+            stroke_to_chain[member] = chain_a_id;
+            chain_a.member_indices.push_back(member);
+        }
+
+        chain_b.active = false;
+        chain_b.member_indices.clear();
+        chain_b.pieces.clear();
+    }
+
+    std::vector<std::pair<std::size_t, std::vector<std::vector<Geom::Point>>>> merged;
+    merged.reserve(chains.size());
+    for (auto &chain : chains) {
+        if (!chain.active || chain.pieces.empty()) {
+            continue;
+        }
+        auto const first_member = *std::min_element(chain.member_indices.begin(), chain.member_indices.end());
+        merged.emplace_back(first_member, std::move(chain.pieces));
+    }
+
+    std::stable_sort(merged.begin(), merged.end(), [](auto const &a, auto const &b) {
+        return a.first < b.first;
+    });
+
     std::vector<std::vector<Geom::Point>> out;
     out.reserve(strokes.size());
-
-    for (auto &stroke : strokes) {
-        if (stroke.size() < 2) {
-            continue;
-        }
-        if (out.empty()) {
-            out.push_back(std::move(stroke));
-            continue;
-        }
-
-        auto &prev = out.back();
-        if (prev.size() < 2) {
-            prev = std::move(stroke);
-            continue;
-        }
-
-        double const gap = Geom::L2(stroke.front() - prev.back());
-        if (gap <= near_dist_mm) {
-            auto it = stroke.begin();
-            if (Geom::are_near(prev.back(), stroke.front(), 1e-9)) {
-                ++it;
+    for (auto &entry : merged) {
+        for (auto &piece : entry.second) {
+            if (piece.size() >= 2) {
+                out.push_back(std::move(piece));
             }
-            prev.insert(prev.end(), it, stroke.end());
-        } else {
-            out.push_back(std::move(stroke));
         }
     }
 
@@ -870,7 +1167,7 @@ static void connect_nearby_strokes_layers(std::vector<std::vector<std::vector<Ge
     }
 }
 
-static void sparse_sample_strokes(std::vector<std::vector<Geom::Point>> &strokes, int keep_every)
+static void sparse_sample_strokes_legacy(std::vector<std::vector<Geom::Point>> &strokes, int keep_every)
 {
     if (keep_every <= 1 || strokes.size() <= 1) {
         return;
@@ -886,13 +1183,123 @@ static void sparse_sample_strokes(std::vector<std::vector<Geom::Point>> &strokes
     strokes = std::move(out);
 }
 
-static void sparse_sample_strokes_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers, int keep_every)
+static void sparse_sample_strokes_directional(std::vector<std::vector<Geom::Point>> &strokes, int keep_every)
+{
+    if (keep_every <= 1 || strokes.size() <= 1) {
+        return;
+    }
+
+    struct SparseCandidate {
+        std::size_t index = 0;
+        int angle_bin = 0;
+        double offset = 0.0;
+        double along = 0.0;
+    };
+
+    constexpr double k_straight_ratio_min = 0.995;
+    constexpr double k_angle_bin_deg = 10.0;
+
+    auto const stroke_length = [](std::vector<Geom::Point> const &stroke) {
+        double len = 0.0;
+        for (std::size_t i = 1; i < stroke.size(); ++i) {
+            len += Geom::L2(stroke[i] - stroke[i - 1]);
+        }
+        return len;
+    };
+
+    std::vector<bool> keep(strokes.size(), true);
+    std::vector<SparseCandidate> candidates;
+    candidates.reserve(strokes.size());
+
+    for (std::size_t i = 0; i < strokes.size(); ++i) {
+        auto const &stroke = strokes[i];
+        if (stroke.size() < 2) {
+            continue;
+        }
+
+        auto const chord = stroke.back() - stroke.front();
+        double const chord_len = Geom::L2(chord);
+        double const draw_len = stroke_length(stroke);
+        if (!(draw_len > 1e-9) || !(chord_len > 1e-9) || (chord_len / draw_len) < k_straight_ratio_min) {
+            continue;
+        }
+
+        double angle = std::atan2(chord[Geom::Y], chord[Geom::X]);
+        if (angle < 0.0) {
+            angle += M_PI;
+        }
+        if (angle >= M_PI) {
+            angle -= M_PI;
+        }
+        int const angle_bin = static_cast<int>(std::floor((angle * 180.0 / M_PI) / k_angle_bin_deg));
+        double const dir_x = std::cos(angle);
+        double const dir_y = std::sin(angle);
+        double const normal_x = -dir_y;
+        double const normal_y = dir_x;
+        auto const mid = (stroke.front() + stroke.back()) * 0.5;
+
+        keep[i] = false;
+        candidates.push_back(SparseCandidate{i, angle_bin, mid[Geom::X] * normal_x + mid[Geom::Y] * normal_y,
+                                             mid[Geom::X] * dir_x + mid[Geom::Y] * dir_y});
+    }
+
+    std::stable_sort(candidates.begin(), candidates.end(), [](SparseCandidate const &a, SparseCandidate const &b) {
+        if (a.angle_bin != b.angle_bin) {
+            return a.angle_bin < b.angle_bin;
+        }
+        if (std::abs(a.offset - b.offset) > 1e-9) {
+            return a.offset < b.offset;
+        }
+        if (std::abs(a.along - b.along) > 1e-9) {
+            return a.along < b.along;
+        }
+        return a.index < b.index;
+    });
+
+    int current_bin = std::numeric_limits<int>::min();
+    std::size_t rank_in_bin = 0;
+    for (auto const &candidate : candidates) {
+        if (candidate.angle_bin != current_bin) {
+            current_bin = candidate.angle_bin;
+            rank_in_bin = 0;
+        }
+        if ((rank_in_bin % static_cast<std::size_t>(keep_every)) == 0) {
+            keep[candidate.index] = true;
+        }
+        ++rank_in_bin;
+    }
+
+    std::vector<std::vector<Geom::Point>> out;
+    out.reserve((strokes.size() + keep_every - 1) / keep_every);
+    for (std::size_t i = 0; i < strokes.size(); ++i) {
+        if (keep[i]) {
+            out.push_back(std::move(strokes[i]));
+        }
+    }
+    strokes = std::move(out);
+}
+
+static void sparse_sample_strokes(std::vector<std::vector<Geom::Point>> &strokes, int keep_every,
+                                  SparseSamplingStrategy strategy)
+{
+    switch (strategy) {
+        case SparseSamplingStrategy::Legacy:
+            sparse_sample_strokes_legacy(strokes, keep_every);
+            return;
+        case SparseSamplingStrategy::Directional:
+            sparse_sample_strokes_directional(strokes, keep_every);
+            return;
+    }
+}
+
+static void sparse_sample_strokes_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers, int keep_every,
+                                         SparseSamplingStrategy strategy)
 {
     if (keep_every <= 1) {
         return;
     }
     for (auto &layer : layers) {
-        sparse_sample_strokes(layer, keep_every);
+        sparse_sample_strokes(layer, keep_every, strategy);
     }
 }
 
@@ -946,6 +1353,8 @@ struct PreparedPlotMm {
     bool preview_invert_x_applied = false;
     bool preview_invert_y_applied = false;
     bool preview_clip_applied = false;
+    bool has_travel_optimization_stats = false;
+    double travel_length_before_optimization_mm = 0;
 
     std::size_t count_strokes() const
     {
@@ -972,12 +1381,11 @@ static double stroke_draw_length_mm(std::vector<Geom::Point> const &stroke)
     return len;
 }
 
-static void fill_grbl_plot_lengths_from_prep(PreparedPlotMm const &prep, GrblExportParams const &params,
-                                             GrblPlotStats &st)
+static bool compute_grbl_plot_lengths_from_prep(PreparedPlotMm const &prep, GrblExportParams const &params,
+                                                double &draw_length_mm, double &travel_length_mm)
 {
-    st.has_length_stats = false;
-    st.draw_length_mm = 0.0;
-    st.travel_length_mm = 0.0;
+    draw_length_mm = 0.0;
+    travel_length_mm = 0.0;
 
     Geom::Point pos(0, 0);
     bool has_any = false;
@@ -996,7 +1404,7 @@ static void fill_grbl_plot_lengths_from_prep(PreparedPlotMm const &prep, GrblExp
     };
 
     if (!prep.layered) {
-        consume_layer(prep.flat_mm, st.draw_length_mm, st.travel_length_mm, pos, has_any);
+        consume_layer(prep.flat_mm, draw_length_mm, travel_length_mm, pos, has_any);
     } else {
         bool first_nonempty_layer = true;
         int active_tool = -1;
@@ -1014,15 +1422,15 @@ static void fill_grbl_plot_lengths_from_prep(PreparedPlotMm const &prep, GrblExp
                 params.pen_change_to_home) {
                 Geom::Point const origin(0, 0);
                 Geom::Point const resume = pos;
-                st.travel_length_mm += Geom::L2(origin - resume);
-                st.travel_length_mm += Geom::L2(resume - origin);
+                travel_length_mm += Geom::L2(origin - resume);
+                travel_length_mm += Geom::L2(resume - origin);
             } else if (needs_tool_change && params.tool_change_use_point) {
                 Geom::Point const change(params.tool_change_x_mm, params.tool_change_y_mm);
                 Geom::Point const resume = pos;
-                st.travel_length_mm += Geom::L2(change - resume);
-                st.travel_length_mm += Geom::L2(resume - change);
+                travel_length_mm += Geom::L2(change - resume);
+                travel_length_mm += Geom::L2(resume - change);
             }
-            consume_layer(layer, st.draw_length_mm, st.travel_length_mm, pos, has_any);
+            consume_layer(layer, draw_length_mm, travel_length_mm, pos, has_any);
             first_nonempty_layer = false;
             if (next_tool >= 0) {
                 active_tool = next_tool;
@@ -1030,7 +1438,22 @@ static void fill_grbl_plot_lengths_from_prep(PreparedPlotMm const &prep, GrblExp
         }
     }
 
-    st.has_length_stats = has_any;
+    return has_any;
+}
+
+static void fill_grbl_plot_lengths_from_prep(PreparedPlotMm const &prep, GrblExportParams const &params,
+                                             GrblPlotStats &st)
+{
+    st.has_length_stats = compute_grbl_plot_lengths_from_prep(prep, params, st.draw_length_mm, st.travel_length_mm);
+    st.has_travel_optimization_stats = false;
+    st.travel_length_before_optimization_mm = 0.0;
+    st.travel_length_saved_by_optimization_mm = 0.0;
+    if (prep.has_travel_optimization_stats) {
+        st.has_travel_optimization_stats = true;
+        st.travel_length_before_optimization_mm = prep.travel_length_before_optimization_mm;
+        st.travel_length_saved_by_optimization_mm =
+            std::max(0.0, prep.travel_length_before_optimization_mm - st.travel_length_mm);
+    }
 }
 
 static void fill_grbl_plot_stats_from_prep(PreparedPlotMm const &prep, GrblExportParams const &params,
@@ -1108,6 +1531,15 @@ static void fill_grbl_plot_stats_from_prep(PreparedPlotMm const &prep, GrblExpor
     st.estimated_duration_sec = duration_sec;
 }
 
+static SparseSamplingStrategy sparse_sampling_strategy_from_pref(Glib::ustring const &value)
+{
+    auto const lowered = Glib::ustring(value).lowercase();
+    if (lowered == "legacy") {
+        return SparseSamplingStrategy::Legacy;
+    }
+    return SparseSamplingStrategy::Directional;
+}
+
 static bool wants_layered_pause(GrblExportParams const &params, GrblExportContext const &ctx)
 {
     if (!params.auto_pause_between_layers && !params.enable_layer_tool_change_m6) {
@@ -1147,6 +1579,84 @@ static int parse_tool_id_from_layer_label(SPObject const *obj)
     } catch (...) {
         return -1;
     }
+}
+
+static bool grbl_stage_debug_enabled()
+{
+    static bool const enabled = [] {
+        if (auto const *value = std::getenv("INKSCAPE_GRBL_DEBUG_STAGES")) {
+            return value[0] != '\0' && std::strcmp(value, "0") != 0;
+        }
+        return false;
+    }();
+    return enabled;
+}
+
+static void log_grbl_stage_stats(char const *scope, char const *variant, char const *stage,
+                                 std::vector<std::vector<Geom::Point>> const &strokes, GrblExportParams const &params)
+{
+    if (!grbl_stage_debug_enabled()) {
+        return;
+    }
+
+    PreparedPlotMm prep;
+    prep.layered = false;
+    prep.flat_mm = strokes;
+
+    GrblPlotStats st;
+    fill_grbl_plot_stats_from_prep(prep, params, st);
+
+    std::ostringstream oss;
+    oss.setf(std::ios::fixed);
+    oss << std::setprecision(3);
+    oss << "[grbl-stage] scope=" << scope
+        << " variant=" << variant
+        << " stage=" << stage
+        << " strokes=" << st.stroke_count;
+    if (st.has_length_stats) {
+        oss << " draw-mm=" << st.draw_length_mm
+            << " travel-mm=" << st.travel_length_mm;
+    }
+    if (st.has_bounds_mm) {
+        oss << " bbox-mm=[" << st.min_x_mm << "," << st.min_y_mm
+            << "]-[" << st.max_x_mm << "," << st.max_y_mm << "]";
+    }
+    std::cerr << oss.str() << std::endl;
+}
+
+static void log_grbl_stage_stats_layers(char const *scope, char const *variant, char const *stage,
+                                        std::vector<std::vector<std::vector<Geom::Point>>> const &layers,
+                                        std::vector<int> const &tool_ids, GrblExportParams const &params)
+{
+    if (!grbl_stage_debug_enabled()) {
+        return;
+    }
+
+    PreparedPlotMm prep;
+    prep.layered = true;
+    prep.layers_mm = layers;
+    prep.layer_tool_ids = tool_ids;
+
+    GrblPlotStats st;
+    fill_grbl_plot_stats_from_prep(prep, params, st);
+
+    std::ostringstream oss;
+    oss.setf(std::ios::fixed);
+    oss << std::setprecision(3);
+    oss << "[grbl-stage] scope=" << scope
+        << " variant=" << variant
+        << " stage=" << stage
+        << " layers=" << st.layer_count
+        << " strokes=" << st.stroke_count;
+    if (st.has_length_stats) {
+        oss << " draw-mm=" << st.draw_length_mm
+            << " travel-mm=" << st.travel_length_mm;
+    }
+    if (st.has_bounds_mm) {
+        oss << " bbox-mm=[" << st.min_x_mm << "," << st.min_y_mm
+            << "]-[" << st.max_x_mm << "," << st.max_y_mm << "]";
+    }
+    std::cerr << oss.str() << std::endl;
 }
 
 static void collect_layers_doc_strokes(SPDesktop *desktop, SPDocument *doc, double const flatness,
@@ -1401,27 +1911,35 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
         collect_layers_doc_strokes(ctx.desktop, doc, params.flatness, layers_doc, &prep.layer_tool_ids, &prep.layer_labels);
         if (layers_doc.size() > 1) {
             prep.layered = true;
+            auto layers_doc_baseline = layers_doc;
             prep.layers_mm.resize(layers_doc.size());
+            std::vector<std::vector<std::vector<Geom::Point>>> layers_mm_baseline(layers_doc.size());
             for (std::size_t i = 0; i < layers_doc.size(); ++i) {
-                auto layer_doc = layers_doc[i];
-                if (params.optimize_stroke_order && layer_doc.size() > 1) {
-                    reorder_strokes_nearest_neighbor(layer_doc, params.optimize_stroke_direction);
-                }
-                strokes_doc_to_mm(layer_doc, mapper, prep.layers_mm[i]);
+                // Keep the source stroke order intact until after geometry-changing stages such as sparse sampling.
+                // This keeps "optimize stroke order" from changing which strokes survive order-based sampling.
+                strokes_doc_to_mm(layers_doc[i], mapper, prep.layers_mm[i]);
+                strokes_doc_to_mm(layers_doc_baseline[i], mapper, layers_mm_baseline[i]);
                 if (params.contour_to_hatch) {
                     convert_closed_contours_to_hatch(prep.layers_mm[i], params.hatch_spacing_mm);
+                    convert_closed_contours_to_hatch(layers_mm_baseline[i], params.hatch_spacing_mm);
                 }
             }
+            log_grbl_stage_stats_layers("layered", "optimized", "after-doc-to-mm", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-doc-to-mm", layers_mm_baseline, prep.layer_tool_ids, params);
             double const page_h = document_page_height_mm(doc);
             if (params.flip_y_canvas) {
                 apply_flip_y_to_layers(prep.layers_mm, page_h);
+                apply_flip_y_to_layers(layers_mm_baseline, page_h);
                 prep.preview_flip_y_applied = true;
                 prep.preview_page_h_mm = page_h;
             }
             apply_axis_mapping_to_layers(prep.layers_mm, params.swap_xy, params.invert_x, params.invert_y);
+            apply_axis_mapping_to_layers(layers_mm_baseline, params.swap_xy, params.invert_x, params.invert_y);
             prep.preview_swap_xy_applied = params.swap_xy;
             prep.preview_invert_x_applied = params.invert_x;
             prep.preview_invert_y_applied = params.invert_y;
+            log_grbl_stage_stats_layers("layered", "optimized", "after-mapping", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-mapping", layers_mm_baseline, prep.layer_tool_ids, params);
             if (params.align_content_min_to_origin) {
                 double shx = 0;
                 double shy = 0;
@@ -1430,18 +1948,63 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
                     prep.preview_align_shift_x_mm = shx;
                     prep.preview_align_shift_y_mm = shy;
                 }
+                apply_align_min_to_layers(layers_mm_baseline, nullptr, nullptr);
             }
+            log_grbl_stage_stats_layers("layered", "optimized", "after-align", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-align", layers_mm_baseline, prep.layer_tool_ids, params);
             if (params.clip_to_machine_bed && params.machine_bed_width_mm > 1e-6 && params.machine_bed_depth_mm > 1e-6) {
                 for (auto &layer : prep.layers_mm) {
                     clip_strokes_to_axis_rect(layer, 0, 0, params.machine_bed_width_mm, params.machine_bed_depth_mm);
                 }
+                for (auto &layer : layers_mm_baseline) {
+                    clip_strokes_to_axis_rect(layer, 0, 0, params.machine_bed_width_mm, params.machine_bed_depth_mm);
+                }
                 prep.preview_clip_applied = true;
             }
+            log_grbl_stage_stats_layers("layered", "optimized", "after-clip", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-clip", layers_mm_baseline, prep.layer_tool_ids, params);
             if (params.enable_sparse_stroke_sampling) {
-                sparse_sample_strokes_layers(prep.layers_mm, params.sparse_keep_every);
+                sparse_sample_strokes_layers(prep.layers_mm, params.sparse_keep_every, params.sparse_sampling_strategy);
+                sparse_sample_strokes_layers(layers_mm_baseline, params.sparse_keep_every,
+                                             params.sparse_sampling_strategy);
             }
+            log_grbl_stage_stats_layers("layered", "optimized", "after-sparse", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-sparse", layers_mm_baseline, prep.layer_tool_ids, params);
+            if (params.optimize_stroke_order) {
+                reorder_strokes_layers_nearest_neighbor(prep.layers_mm, params.optimize_stroke_direction);
+            }
+            log_grbl_stage_stats_layers("layered", "optimized", "after-reorder", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-reorder", layers_mm_baseline, prep.layer_tool_ids, params);
             if (params.enable_near_connect) {
+                // Run bridge-joining after whole-stroke reordering so adjacent strokes are already spatial neighbors.
                 connect_nearby_strokes_layers(prep.layers_mm, params.near_connect_distance_mm);
+                connect_nearby_strokes_layers(layers_mm_baseline, params.near_connect_distance_mm);
+                log_grbl_stage_stats_layers("layered", "optimized", "after-near-connect", prep.layers_mm, prep.layer_tool_ids, params);
+                log_grbl_stage_stats_layers("layered", "baseline", "after-near-connect", layers_mm_baseline, prep.layer_tool_ids, params);
+                if (params.optimize_stroke_order) {
+                    // Near-connect can merge and reshape strokes, so give the merged result one more ordering pass.
+                    reorder_strokes_layers_nearest_neighbor(prep.layers_mm, params.optimize_stroke_direction);
+                }
+            }
+            log_grbl_stage_stats_layers("layered", "optimized", "after-near-reorder", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-near-reorder", layers_mm_baseline, prep.layer_tool_ids, params);
+            if (params.enable_path_lead_in_out) {
+                apply_open_stroke_lead_in_out_layers(prep.layers_mm, params.lead_in_out_distance_mm);
+                apply_open_stroke_lead_in_out_layers(layers_mm_baseline, params.lead_in_out_distance_mm);
+            }
+            log_grbl_stage_stats_layers("layered", "optimized", "after-lead", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-lead", layers_mm_baseline, prep.layer_tool_ids, params);
+            if (params.optimize_stroke_order) {
+                PreparedPlotMm baseline_prep;
+                baseline_prep.layered = true;
+                baseline_prep.layers_mm = layers_mm_baseline;
+                baseline_prep.layer_tool_ids = prep.layer_tool_ids;
+                double baseline_draw = 0.0;
+                double baseline_travel = 0.0;
+                if (compute_grbl_plot_lengths_from_prep(baseline_prep, params, baseline_draw, baseline_travel)) {
+                    prep.has_travel_optimization_stats = true;
+                    prep.travel_length_before_optimization_mm = baseline_travel;
+                }
             }
             prune_empty_layers(prep.layers_mm, &prep.layer_tool_ids, &prep.layer_labels);
             if (prep.layers_mm.empty()) {
@@ -1470,10 +2033,7 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
         return false;
     }
 
-    if (params.optimize_stroke_order && strokes_doc.size() > 1) {
-        reorder_strokes_nearest_neighbor(strokes_doc, params.optimize_stroke_direction);
-    }
-
+    auto const strokes_doc_baseline = strokes_doc;
     constexpr std::size_t max_strokes = 200000;
     if (strokes_doc.size() > max_strokes) {
         strokes_doc.resize(max_strokes);
@@ -1485,9 +2045,14 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     }
 
     strokes_doc_to_mm(strokes_doc, mapper, prep.flat_mm);
+    std::vector<std::vector<Geom::Point>> flat_mm_baseline;
+    strokes_doc_to_mm(strokes_doc_baseline, mapper, flat_mm_baseline);
     if (params.contour_to_hatch) {
         convert_closed_contours_to_hatch(prep.flat_mm, params.hatch_spacing_mm);
+        convert_closed_contours_to_hatch(flat_mm_baseline, params.hatch_spacing_mm);
     }
+    log_grbl_stage_stats("flat", "optimized", "after-doc-to-mm", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-doc-to-mm", flat_mm_baseline, params);
     if (prep.flat_mm.empty()) {
         err_out = _("No drawable vector paths found (convert objects to paths if needed).");
         return false;
@@ -1496,13 +2061,17 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     if (params.flip_y_canvas) {
         double const ph = document_page_height_mm(doc);
         apply_flip_y_canvas(prep.flat_mm, ph);
+        apply_flip_y_canvas(flat_mm_baseline, ph);
         prep.preview_flip_y_applied = true;
         prep.preview_page_h_mm = ph;
     }
     apply_axis_mapping(prep.flat_mm, params.swap_xy, params.invert_x, params.invert_y);
+    apply_axis_mapping(flat_mm_baseline, params.swap_xy, params.invert_x, params.invert_y);
     prep.preview_swap_xy_applied = params.swap_xy;
     prep.preview_invert_x_applied = params.invert_x;
     prep.preview_invert_y_applied = params.invert_y;
+    log_grbl_stage_stats("flat", "optimized", "after-mapping", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-mapping", flat_mm_baseline, params);
     if (params.align_content_min_to_origin) {
         double shx = 0;
         double shy = 0;
@@ -1511,16 +2080,57 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
             prep.preview_align_shift_x_mm = shx;
             prep.preview_align_shift_y_mm = shy;
         }
+        apply_align_min_to_origin(flat_mm_baseline, nullptr, nullptr);
     }
+    log_grbl_stage_stats("flat", "optimized", "after-align", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-align", flat_mm_baseline, params);
     if (params.clip_to_machine_bed && params.machine_bed_width_mm > 1e-6 && params.machine_bed_depth_mm > 1e-6) {
         clip_strokes_to_axis_rect(prep.flat_mm, 0, 0, params.machine_bed_width_mm, params.machine_bed_depth_mm);
+        clip_strokes_to_axis_rect(flat_mm_baseline, 0, 0, params.machine_bed_width_mm, params.machine_bed_depth_mm);
         prep.preview_clip_applied = true;
     }
+    log_grbl_stage_stats("flat", "optimized", "after-clip", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-clip", flat_mm_baseline, params);
     if (params.enable_sparse_stroke_sampling) {
-        sparse_sample_strokes(prep.flat_mm, params.sparse_keep_every);
+        sparse_sample_strokes(prep.flat_mm, params.sparse_keep_every, params.sparse_sampling_strategy);
+        sparse_sample_strokes(flat_mm_baseline, params.sparse_keep_every, params.sparse_sampling_strategy);
     }
+    log_grbl_stage_stats("flat", "optimized", "after-sparse", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-sparse", flat_mm_baseline, params);
+    if (params.optimize_stroke_order && prep.flat_mm.size() > 1) {
+        reorder_strokes_nearest_neighbor(prep.flat_mm, params.optimize_stroke_direction);
+    }
+    log_grbl_stage_stats("flat", "optimized", "after-reorder", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-reorder", flat_mm_baseline, params);
     if (params.enable_near_connect) {
+        // Run bridge-joining after whole-stroke reordering so adjacent strokes are already spatial neighbors.
         connect_nearby_strokes(prep.flat_mm, params.near_connect_distance_mm);
+        connect_nearby_strokes(flat_mm_baseline, params.near_connect_distance_mm);
+        log_grbl_stage_stats("flat", "optimized", "after-near-connect", prep.flat_mm, params);
+        log_grbl_stage_stats("flat", "baseline", "after-near-connect", flat_mm_baseline, params);
+        if (params.optimize_stroke_order && prep.flat_mm.size() > 1) {
+            // Near-connect can merge and reshape strokes, so give the merged result one more ordering pass.
+            reorder_strokes_nearest_neighbor(prep.flat_mm, params.optimize_stroke_direction);
+        }
+    }
+    log_grbl_stage_stats("flat", "optimized", "after-near-reorder", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-near-reorder", flat_mm_baseline, params);
+    if (params.enable_path_lead_in_out) {
+        apply_open_stroke_lead_in_out(prep.flat_mm, params.lead_in_out_distance_mm);
+        apply_open_stroke_lead_in_out(flat_mm_baseline, params.lead_in_out_distance_mm);
+    }
+    log_grbl_stage_stats("flat", "optimized", "after-lead", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-lead", flat_mm_baseline, params);
+    if (params.optimize_stroke_order) {
+        PreparedPlotMm baseline_prep;
+        baseline_prep.layered = false;
+        baseline_prep.flat_mm = flat_mm_baseline;
+        double baseline_draw = 0.0;
+        double baseline_travel = 0.0;
+        if (compute_grbl_plot_lengths_from_prep(baseline_prep, params, baseline_draw, baseline_travel)) {
+            prep.has_travel_optimization_stats = true;
+            prep.travel_length_before_optimization_mm = baseline_travel;
+        }
     }
 
     if (prep.flat_mm.empty()) {
@@ -2031,6 +2641,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     constexpr auto k_pen_dn = "/options/grbl/pen-down-cmd";
     constexpr auto k_pen_up_delay = "/options/grbl/pen-up-delay-ms";
     constexpr auto k_pen_down_delay = "/options/grbl/pen-down-delay-ms";
+    constexpr auto k_lead_in_out = "/options/grbl/enable-path-lead-in-out";
+    constexpr auto k_lead_in_out_dist = "/options/grbl/path-lead-in-out-distance-mm";
     constexpr auto k_pen_ctl = "/options/grbl/pen-control";
     constexpr auto k_long_pen_up = "/options/grbl/enable-long-pen-up";
     constexpr auto k_long_pen_up_mm = "/options/grbl/long-pen-up-mm";
@@ -2039,6 +2651,7 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     constexpr auto k_near_connect_dist = "/options/grbl/near-connect-distance-mm";
     constexpr auto k_sparse_sampling = "/options/grbl/enable-sparse-stroke-sampling";
     constexpr auto k_sparse_keep_every = "/options/grbl/sparse-keep-every";
+    constexpr auto k_sparse_strategy = "/options/grbl/sparse-strategy";
     constexpr auto k_opt = "/options/grbl/optimize-stroke-order";
     constexpr auto k_opt_dir = "/options/grbl/optimize-stroke-direction";
     constexpr auto k_hatch = "/options/grbl/contour-to-hatch";
@@ -2079,12 +2692,15 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     }
     params.pen_up_delay_ms = prefs->getDoubleLimited(k_pen_up_delay, 0.0, 0.0, 5000.0);
     params.pen_down_delay_ms = prefs->getDoubleLimited(k_pen_down_delay, 0.0, 0.0, 5000.0);
+    params.enable_path_lead_in_out = prefs->getBool(k_lead_in_out, false);
+    params.lead_in_out_distance_mm = prefs->getDoubleLimited(k_lead_in_out_dist, 0.0, 0.0, 1000.0);
     params.long_pen_up_mm = prefs->getDoubleLimited(k_long_pen_up_mm, 10.0, -1000.0, 1000.0);
     params.long_move_distance_mm = prefs->getDoubleLimited(k_long_move_dist, 20.0, 0.0, 100000.0);
     params.enable_near_connect = prefs->getBool(k_near_connect, false);
     params.near_connect_distance_mm = prefs->getDoubleLimited(k_near_connect_dist, 0.3, 0.0, 1000.0);
     params.enable_sparse_stroke_sampling = prefs->getBool(k_sparse_sampling, false);
     params.sparse_keep_every = prefs->getIntLimited(k_sparse_keep_every, 1, 1, 64);
+    params.sparse_sampling_strategy = sparse_sampling_strategy_from_pref(prefs->getString(k_sparse_strategy, "legacy"));
     params.optimize_stroke_order = prefs->getBool(k_opt, true);
     params.optimize_stroke_direction = prefs->getBool(k_opt_dir, true);
     params.contour_to_hatch = prefs->getBool(k_hatch, false);

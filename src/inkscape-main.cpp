@@ -12,6 +12,8 @@
 
 #include <glibmm/miscutils.h>
 #include <gsl/gsl_errno.h>
+#include <clocale>
+#include <locale>
 #ifdef _WIN32
 #include <windows.h> // SetDllDirectoryW, SetConsoleOutputCP
 #undef IGNORE
@@ -25,6 +27,51 @@
 #include "preferences.h"
 #include "io/resource.h"
 #include "util/statics.h"
+
+#ifdef _WIN32
+namespace {
+
+struct EarlyLocaleGuard
+{
+    EarlyLocaleGuard()
+    {
+        _putenv("LC_ALL=C");
+        _putenv("LANG=C");
+        std::setlocale(LC_ALL, "C");
+        std::locale::global(std::locale::classic());
+    }
+};
+
+EarlyLocaleGuard early_locale_guard;
+
+} // namespace
+#endif
+
+static void normalize_process_locale()
+{
+#ifdef _WIN32
+    Glib::setenv("LC_ALL", "C", true);
+    if (Glib::getenv("LANG").empty()) {
+        Glib::setenv("LANG", "C", true);
+    }
+    std::setlocale(LC_ALL, "C");
+    std::locale::global(std::locale::classic());
+    return;
+#endif
+
+    if (!std::setlocale(LC_ALL, "")) {
+        std::setlocale(LC_ALL, "C");
+        std::locale::global(std::locale::classic());
+        return;
+    }
+
+    try {
+        std::locale::global(std::locale(""));
+    } catch (std::runtime_error const &) {
+        std::setlocale(LC_ALL, "C");
+        std::locale::global(std::locale::classic());
+    }
+}
 
 static void set_extensions_env()
 {
@@ -161,6 +208,7 @@ static void convert_legacy_options(int &argc, char **&argv)
 
 int main(int argc, char *argv[])
 {
+    normalize_process_locale();
     Gtk::Application::wrap_in_search_entry2();
 
 #if !defined(_WIN32)

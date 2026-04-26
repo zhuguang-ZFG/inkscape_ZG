@@ -8,14 +8,40 @@
  */
 
 #include "util/units.h"
+
+#include <vector>
+#include <glibmm/fileutils.h>
+#include <glibmm/miscutils.h>
+
 #include "io/resource.h"
+#include "path-prefix.h"
 
 namespace Inkscape::Util {
 
 std::string UnitTable::getUnitsFilename()
 {
     using namespace Inkscape::IO::Resource;
-    return get_filename(UIS, "units.xml", false, true);
+
+    if (auto filename = get_filename(UIS, "units.xml", false, true); !filename.empty()) {
+        return filename;
+    }
+
+    std::vector<std::string> candidates;
+    candidates.emplace_back(Glib::build_filename(get_inkscape_datadir(), "inkscape", "share", "ui", "units.xml"));
+    candidates.emplace_back(Glib::build_filename(get_inkscape_datadir(), "share", "ui", "units.xml"));
+
+    if (auto const *program_dir = get_program_dir(); program_dir && *program_dir) {
+        candidates.emplace_back(Glib::build_filename(program_dir, "..", "..", "share", "ui", "units.xml"));
+        candidates.emplace_back(Glib::build_filename(program_dir, "..", "share", "inkscape", "ui", "units.xml"));
+    }
+
+    for (auto const &candidate : candidates) {
+        if (Glib::file_test(candidate, Glib::FileTest::IS_REGULAR)) {
+            return Glib::canonicalize_filename(candidate);
+        }
+    }
+
+    return {};
 }
 
 } // namespace Inkscape::Util
