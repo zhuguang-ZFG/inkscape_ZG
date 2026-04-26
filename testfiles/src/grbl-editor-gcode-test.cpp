@@ -8,7 +8,11 @@ using Inkscape::UI::Dialog::EditorGcodeBounds;
 using Inkscape::UI::Dialog::analyze_editor_gcode_bounds_mm;
 using Inkscape::UI::Dialog::build_editor_gcode_out_of_bed_message;
 using Inkscape::UI::Dialog::count_executable_editor_gcode_lines;
+using Inkscape::UI::Dialog::for_each_executable_grbl_gcode_line;
+using Inkscape::UI::Dialog::is_skippable_grbl_gcode_line;
 using Inkscape::UI::Dialog::nearly_equal_mm;
+using Inkscape::UI::Dialog::normalize_executable_grbl_gcode_line;
+using Inkscape::UI::Dialog::trim_grbl_gcode_line_in_place;
 
 TEST(GrblEditorGcodeTest, TracksAbsoluteAndRelativeMovesInMillimeters)
 {
@@ -75,4 +79,44 @@ TEST(GrblEditorGcodeTest, ExecutableLineCountSkipsCommentsAndCanClamp)
 
     EXPECT_EQ(count_executable_editor_gcode_lines(text, 10), 2u);
     EXPECT_EQ(count_executable_editor_gcode_lines(text, 1), 2u);
+}
+
+TEST(GrblEditorGcodeTest, SharedLineNormalizationTrimsAndSkipsCommentOnlyLines)
+{
+    std::string line = " \tG1 X1 Y2\r";
+    trim_grbl_gcode_line_in_place(line);
+    EXPECT_EQ(line, "G1 X1 Y2");
+
+    std::string blank = " \t\r";
+    EXPECT_FALSE(normalize_executable_grbl_gcode_line(blank));
+    EXPECT_TRUE(blank.empty());
+
+    std::string semicolon = " ; comment\r";
+    EXPECT_FALSE(normalize_executable_grbl_gcode_line(semicolon));
+    EXPECT_EQ(semicolon, "; comment");
+
+    std::string paren = "\t(comment only)\r";
+    EXPECT_FALSE(normalize_executable_grbl_gcode_line(paren));
+    EXPECT_TRUE(is_skippable_grbl_gcode_line(paren));
+
+    std::string inline_comment = "G1 X1 (keep inline)";
+    EXPECT_TRUE(normalize_executable_grbl_gcode_line(inline_comment));
+    EXPECT_FALSE(is_skippable_grbl_gcode_line(inline_comment));
+}
+
+TEST(GrblEditorGcodeTest, SharedExecutableLineIterationCanStopEarly)
+{
+    std::string joined;
+    auto const count = for_each_executable_grbl_gcode_line(
+        "; comment\n"
+        "G0 X1\r\n"
+        "(note)\n"
+        "G1 Y2\n",
+        [&](std::string const &line) {
+            joined += line;
+            return false;
+        });
+
+    EXPECT_EQ(count, 1u);
+    EXPECT_EQ(joined, "G0 X1");
 }

@@ -20,6 +20,7 @@
 #include "axidraw/device/grbl-link.h"
 #include "axidraw/device/serial-port.h"
 #include "axidraw/pipeline/grbl-export.h"
+#include "ui/dialog/grbl-editor-gcode.h"
 #include "ui/dialog-run.h"
 
 namespace Inkscape::UI::Dialog {
@@ -45,47 +46,6 @@ void prepare_stream_link(Inkscape::Axidraw::GrblLink *link)
         if (!link->read_line(junk, 60)) {
             break;
         }
-    }
-}
-
-template <typename Func>
-void for_each_executable_gcode_line(std::string const &text, Func &&func)
-{
-    auto trim_in_place = [](std::string &s) {
-        while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) {
-            s.pop_back();
-        }
-        auto it = s.begin();
-        while (it != s.end() && (*it == ' ' || *it == '\t')) {
-            ++it;
-        }
-        s.erase(s.begin(), it);
-    };
-
-    auto should_skip_gcode_line = [](std::string const &s) {
-        if (s.empty() || s[0] == ';') {
-            return true;
-        }
-        if (s[0] == '(') {
-            auto const end = s.find(')');
-            if (end != std::string::npos && end + 1 == s.size()) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    std::istringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        trim_in_place(line);
-        if (should_skip_gcode_line(line)) {
-            continue;
-        }
-        func(line);
     }
 }
 
@@ -342,20 +302,21 @@ void GrblPanelSender::run_editor_gcode_send_worker(GrblPanelSenderContext const 
         std::string err;
         bool write_failed = false;
         std::size_t sent = 0;
-        for_each_executable_gcode_line(text, [&](std::string const &line) {
+        for_each_executable_grbl_gcode_line(text, [&](std::string const &line) {
             if (!err.empty() || write_failed) {
-                return;
+                return false;
             }
             if (sent >= k_max_gcode_stream_lines) {
                 err = _("Too many G-code lines (limit exceeded).");
-                return;
+                return false;
             }
             if (!link->send_line_wait_ok(line, err)) {
                 write_failed = true;
-                return;
+                return false;
             }
             ++sent;
             progress.maybe_post(sent, false);
+            return true;
         });
 
         if (write_failed) {

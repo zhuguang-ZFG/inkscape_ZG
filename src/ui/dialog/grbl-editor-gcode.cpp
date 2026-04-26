@@ -17,49 +17,6 @@ namespace {
 
 constexpr double k_mm_per_in = 25.4;
 
-void trim_in_place(std::string &s)
-{
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) {
-        s.pop_back();
-    }
-    auto it = s.begin();
-    while (it != s.end() && (*it == ' ' || *it == '\t')) {
-        ++it;
-    }
-    s.erase(s.begin(), it);
-}
-
-bool should_skip_gcode_line(std::string const &s)
-{
-    if (s.empty() || s[0] == ';') {
-        return true;
-    }
-    if (s[0] == '(') {
-        auto const end = s.find(')');
-        if (end != std::string::npos && end + 1 == s.size()) {
-            return true;
-        }
-    }
-    return false;
-}
-
-template <typename Func>
-void for_each_executable_gcode_line(std::string const &text, Func &&func)
-{
-    std::istringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        trim_in_place(line);
-        if (should_skip_gcode_line(line)) {
-            continue;
-        }
-        func(line);
-    }
-}
-
 bool parse_gcode_word_value(std::string const &line, std::size_t &pos, char &letter, double &value)
 {
     while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) {
@@ -86,6 +43,59 @@ bool parse_gcode_word_value(std::string const &line, std::size_t &pos, char &let
 
 } // namespace
 
+void trim_grbl_gcode_line_in_place(std::string &line)
+{
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) {
+        line.pop_back();
+    }
+    auto it = line.begin();
+    while (it != line.end() && (*it == ' ' || *it == '\t')) {
+        ++it;
+    }
+    line.erase(line.begin(), it);
+}
+
+bool is_skippable_grbl_gcode_line(std::string const &line)
+{
+    if (line.empty() || line[0] == ';') {
+        return true;
+    }
+    if (line[0] == '(') {
+        auto const end = line.find(')');
+        if (end != std::string::npos && end + 1 == line.size()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool normalize_executable_grbl_gcode_line(std::string &line)
+{
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+    }
+    trim_grbl_gcode_line_in_place(line);
+    return !is_skippable_grbl_gcode_line(line);
+}
+
+std::size_t for_each_executable_grbl_gcode_line(std::string const &text,
+                                                std::function<bool(std::string const &)> const &func)
+{
+    std::istringstream in(text);
+    std::string line;
+    std::size_t count = 0;
+    while (std::getline(in, line)) {
+        if (!normalize_executable_grbl_gcode_line(line)) {
+            continue;
+        }
+        ++count;
+        if (!func(line)) {
+            break;
+        }
+    }
+    return count;
+}
+
 bool analyze_editor_gcode_bounds_mm(std::string const &text, EditorGcodeBounds &bounds)
 {
     bounds = {};
@@ -108,7 +118,7 @@ bool analyze_editor_gcode_bounds_mm(std::string const &text, EditorGcodeBounds &
         bounds.max_y_mm = std::max(bounds.max_y_mm, y_mm);
     };
 
-    for_each_executable_gcode_line(text, [&](std::string const &line) {
+    for_each_executable_grbl_gcode_line(text, [&](std::string const &line) {
         std::size_t pos = 0;
         bool saw_motion_g = false;
         bool has_x = false;
@@ -164,6 +174,7 @@ bool analyze_editor_gcode_bounds_mm(std::string const &text, EditorGcodeBounds &
             current_y_mm = next_y_mm;
             update_bounds(current_x_mm, current_y_mm);
         }
+        return true;
     });
 
     return true;
@@ -172,8 +183,9 @@ bool analyze_editor_gcode_bounds_mm(std::string const &text, EditorGcodeBounds &
 std::size_t count_executable_editor_gcode_lines(std::string const &text, std::size_t const max_lines)
 {
     std::size_t count = 0;
-    for_each_executable_gcode_line(text, [&](std::string const &) {
+    for_each_executable_grbl_gcode_line(text, [&](std::string const &) {
         ++count;
+        return true;
     });
 
     if (max_lines > 0 && count > max_lines) {

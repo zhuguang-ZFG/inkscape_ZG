@@ -144,36 +144,6 @@ bool send_link_lines(Inkscape::Axidraw::GrblLink &link, std::initializer_list<st
         lines, err_out);
 }
 
-void trim_in_place(std::string &s)
-{
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) {
-        s.pop_back();
-    }
-    auto it = s.begin();
-    while (it != s.end() && (*it == ' ' || *it == '\t')) {
-        ++it;
-    }
-    s.erase(s.begin(), it);
-}
-
-/// Skip empty, `;` comments, and parenthesis-only comment lines; keep inline `(鈥?` on G-code.
-bool should_skip_gcode_line(std::string const &s)
-{
-    if (s.empty()) {
-        return true;
-    }
-    if (s[0] == ';') {
-        return true;
-    }
-    if (s[0] == '(') {
-        auto const end = s.find(')');
-        if (end != std::string::npos && end + 1 == s.size()) {
-            return true;
-        }
-    }
-    return false;
-}
-
 std::string detect_radio_mode_from_reply(std::string reply)
 {
     for (auto &c : reply) {
@@ -2885,7 +2855,7 @@ void GrblControlPanel::build_ui()
                 if (!_link->read_line(line, 1200)) {
                     break;
                 }
-                trim_in_place(line);
+                trim_grbl_gcode_line_in_place(line);
                 if (line.empty() || line == "ok") {
                     continue;
                 }
