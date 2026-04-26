@@ -330,24 +330,6 @@ Glib::RefPtr<Gio::ListStore<Gtk::FileFilter>> create_gcode_file_filters()
     return filters;
 }
 
-bool update_check_if_needed(Gtk::CheckButton &button, bool const value)
-{
-    if (button.get_active() == value) {
-        return false;
-    }
-    button.set_active(value);
-    return true;
-}
-
-bool update_spin_if_needed(Gtk::SpinButton &spin, double const value, double const epsilon = 1e-6)
-{
-    if (std::abs(spin.get_value() - value) <= epsilon) {
-        return false;
-    }
-    spin.set_value(value);
-    return true;
-}
-
 /// Last folder for G-code save/open dialogs in this panel.
 constexpr auto k_pref_save_gcode_dir = "/dialogs/grblcontrol/save_gcode_dir";
 constexpr std::size_t k_max_gcode_editor_bytes = 32u * 1024u * 1024u;
