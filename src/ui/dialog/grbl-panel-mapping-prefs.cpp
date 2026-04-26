@@ -35,6 +35,10 @@ constexpr auto k_pref_near_connect = "/options/grbl/enable-near-connect";
 constexpr auto k_pref_near_connect_dist = "/options/grbl/near-connect-distance-mm";
 constexpr auto k_pref_sparse_sampling = "/options/grbl/enable-sparse-stroke-sampling";
 constexpr auto k_pref_sparse_keep_every = "/options/grbl/sparse-keep-every";
+constexpr auto k_pref_contour_to_hatch = "/options/grbl/contour-to-hatch";
+constexpr auto k_pref_hatch_spacing = "/options/grbl/hatch-spacing-mm";
+constexpr auto k_pref_hatch_angle = "/options/grbl/hatch-angle-deg";
+constexpr auto k_pref_hatch_cross = "/options/grbl/hatch-cross";
 constexpr auto k_pref_auto_pause_between_layers = "/options/grbl/auto-pause-between-layers";
 constexpr auto k_pref_manual_pen_change = "/options/grbl/manual-pen-change";
 constexpr auto k_pref_pen_change_to_home = "/options/grbl/pen-change-to-home";
@@ -65,6 +69,8 @@ GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs
     values.long_pen_up = prefs.getBool(k_pref_long_pen_up, false);
     values.near_connect = prefs.getBool(k_pref_near_connect, false);
     values.sparse_sampling = prefs.getBool(k_pref_sparse_sampling, false);
+    values.contour_to_hatch = prefs.getBool(k_pref_contour_to_hatch, false);
+    values.hatch_cross = prefs.getBool(k_pref_hatch_cross, false);
     values.auto_pause_between_layers = prefs.getBool(k_pref_auto_pause_between_layers, false);
     values.manual_pen_change = prefs.getBool(k_pref_manual_pen_change, false);
     values.tool_change_m6 = prefs.getBool(k_pref_tool_change_m6, false);
@@ -77,6 +83,8 @@ GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs
     values.pen_down_delay = prefs.getDoubleLimited(k_pref_pen_down_delay, 0.0, 0.0, 5000.0);
     values.lead_in_dist = prefs.getDoubleLimited(k_pref_lead_in_dist, legacy_lead_dist, 0.0, 1000.0);
     values.lead_out_dist = prefs.getDoubleLimited(k_pref_lead_out_dist, legacy_lead_dist, 0.0, 1000.0);
+    values.hatch_spacing = prefs.getDoubleLimited(k_pref_hatch_spacing, 1.0, 0.05, 100.0);
+    values.hatch_angle = prefs.getDoubleLimited(k_pref_hatch_angle, 0.0, -180.0, 180.0);
     values.pen_up_cmd = prefs.getString(k_pref_pen_up, "G1 Z0 F3000");
     values.pen_down_cmd = prefs.getString(k_pref_pen_down, "G1 Z5 F3000");
     values.bed_width = prefs.getDoubleLimited(k_pref_bed_width, 300.0, 1.0, 2000.0);
@@ -107,6 +115,8 @@ void save_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs, GrblPanelMappin
     prefs.setBool(k_pref_long_pen_up, values.long_pen_up);
     prefs.setBool(k_pref_near_connect, values.near_connect);
     prefs.setBool(k_pref_sparse_sampling, values.sparse_sampling);
+    prefs.setBool(k_pref_contour_to_hatch, values.contour_to_hatch);
+    prefs.setBool(k_pref_hatch_cross, values.hatch_cross);
     prefs.setBool(k_pref_auto_pause_between_layers, values.auto_pause_between_layers);
     prefs.setBool(k_pref_manual_pen_change, values.manual_pen_change);
     prefs.setBool(k_pref_pen_change_to_home, values.manual_pen_change_to_home);
@@ -119,6 +129,8 @@ void save_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs, GrblPanelMappin
     prefs.setDouble(k_pref_pen_down_delay, values.pen_down_delay);
     prefs.setDouble(k_pref_lead_in_dist, values.lead_in_dist);
     prefs.setDouble(k_pref_lead_out_dist, values.lead_out_dist);
+    prefs.setDouble(k_pref_hatch_spacing, values.hatch_spacing);
+    prefs.setDouble(k_pref_hatch_angle, values.hatch_angle);
     prefs.setDouble(k_pref_lead_in_out_dist, (values.lead_in_dist + values.lead_out_dist) * 0.5);
     prefs.setString(k_pref_pen_up, values.pen_up_cmd);
     prefs.setString(k_pref_pen_down, values.pen_down_cmd);

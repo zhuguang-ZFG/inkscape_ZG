@@ -85,6 +85,10 @@ struct GrblExportParams {
     bool contour_to_hatch = false;
     /// Hatch scanline spacing in machine millimetres (used when @a contour_to_hatch is true).
     double hatch_spacing_mm = 1.0;
+    /// Hatch line angle in degrees (0 = horizontal scanlines in machine coordinates).
+    double hatch_angle_deg = 0.0;
+    /// Add a second hatch pass rotated by 90 degrees from @a hatch_angle_deg.
+    bool hatch_cross = false;
 
     /// After converting to millimetres: mirror Y using <tt>page_height_mm − y</tt> (SVG Y-down → common machine Y-up).
     bool flip_y_canvas = false;

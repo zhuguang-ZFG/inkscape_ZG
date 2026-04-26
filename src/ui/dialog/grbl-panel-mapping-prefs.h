@@ -27,6 +27,8 @@ struct GrblPanelMappingPrefs
     bool long_pen_up = false;
     bool near_connect = false;
     bool sparse_sampling = false;
+    bool contour_to_hatch = false;
+    bool hatch_cross = false;
     bool manual_pen_change_to_home = true;
     bool manual_pen_change_prompt = true;
     bool tool_change_point = false;
@@ -39,6 +41,8 @@ struct GrblPanelMappingPrefs
     double pen_down_delay = 0.0;
     double lead_in_dist = 0.0;
     double lead_out_dist = 0.0;
+    double hatch_spacing = 1.0;
+    double hatch_angle = 0.0;
     std::string pen_up_cmd = "G1 Z0 F3000";
     std::string pen_down_cmd = "G1 Z5 F3000";
     double bed_width = 300.0;

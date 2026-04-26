@@ -608,8 +608,17 @@ static bool stroke_is_closed(std::vector<Geom::Point> const &stroke, double eps_
     return stroke.size() >= 4 && Geom::L2(stroke.front() - stroke.back()) <= eps_mm;
 }
 
+static Geom::Point rotate_point_around(Geom::Point const &point, Geom::Point const &origin, double const angle_rad)
+{
+    double const s = std::sin(angle_rad);
+    double const c = std::cos(angle_rad);
+    double const dx = point[Geom::X] - origin[Geom::X];
+    double const dy = point[Geom::Y] - origin[Geom::Y];
+    return {origin[Geom::X] + dx * c - dy * s, origin[Geom::Y] + dx * s + dy * c};
+}
+
 static std::vector<std::vector<Geom::Point>>
-contour_to_hatch_scanlines(std::vector<Geom::Point> const &closed_stroke, double spacing_mm)
+contour_to_hatch_scanlines(std::vector<Geom::Point> const &closed_stroke, double spacing_mm, double angle_deg)
 {
     std::vector<std::vector<Geom::Point>> out;
     if (closed_stroke.size() < 4 || spacing_mm <= 1e-6) {
@@ -624,14 +633,36 @@ contour_to_hatch_scanlines(std::vector<Geom::Point> const &closed_stroke, double
         return out;
     }
 
+    double min_x = std::numeric_limits<double>::infinity();
     double min_y = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
     double max_y = -std::numeric_limits<double>::infinity();
     for (auto const &p : poly) {
+        min_x = std::min(min_x, p[Geom::X]);
         min_y = std::min(min_y, p[Geom::Y]);
+        max_x = std::max(max_x, p[Geom::X]);
         max_y = std::max(max_y, p[Geom::Y]);
     }
-    if (!std::isfinite(min_y) || !std::isfinite(max_y) || max_y - min_y < 1e-6) {
+    if (!std::isfinite(min_x) || !std::isfinite(min_y) || !std::isfinite(max_x) || !std::isfinite(max_y) ||
+        max_y - min_y < 1e-6) {
         return out;
+    }
+
+    Geom::Point const rotation_center((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
+    double const angle_rad = angle_deg * M_PI / 180.0;
+    if (std::abs(angle_rad) > 1e-9) {
+        for (auto &p : poly) {
+            p = rotate_point_around(p, rotation_center, -angle_rad);
+        }
+        min_y = std::numeric_limits<double>::infinity();
+        max_y = -std::numeric_limits<double>::infinity();
+        for (auto const &p : poly) {
+            min_y = std::min(min_y, p[Geom::Y]);
+            max_y = std::max(max_y, p[Geom::Y]);
+        }
+        if (!std::isfinite(min_y) || !std::isfinite(max_y) || max_y - min_y < 1e-6) {
+            return out;
+        }
     }
 
     bool flip_dir = false;
@@ -673,6 +704,11 @@ contour_to_hatch_scanlines(std::vector<Geom::Point> const &closed_stroke, double
                 seg.emplace_back(x0, y);
                 seg.emplace_back(x1, y);
             }
+            if (std::abs(angle_rad) > 1e-9) {
+                for (auto &point : seg) {
+                    point = rotate_point_around(point, rotation_center, angle_rad);
+                }
+            }
             out.push_back(std::move(seg));
             flip_dir = !flip_dir;
         }
@@ -680,7 +716,8 @@ contour_to_hatch_scanlines(std::vector<Geom::Point> const &closed_stroke, double
     return out;
 }
 
-static void convert_closed_contours_to_hatch(std::vector<std::vector<Geom::Point>> &strokes_mm, double spacing_mm)
+static void convert_closed_contours_to_hatch(std::vector<std::vector<Geom::Point>> &strokes_mm, double spacing_mm,
+                                             double angle_deg, bool cross_hatch)
 {
     if (spacing_mm <= 1e-6 || strokes_mm.empty()) {
         return;
@@ -692,7 +729,11 @@ static void convert_closed_contours_to_hatch(std::vector<std::vector<Geom::Point
             out.push_back(stroke);
             continue;
         }
-        auto hatch = contour_to_hatch_scanlines(stroke, spacing_mm);
+        auto hatch = contour_to_hatch_scanlines(stroke, spacing_mm, angle_deg);
+        if (cross_hatch) {
+            auto cross = contour_to_hatch_scanlines(stroke, spacing_mm, angle_deg + 90.0);
+            hatch.insert(hatch.end(), std::make_move_iterator(cross.begin()), std::make_move_iterator(cross.end()));
+        }
         if (hatch.empty()) {
             out.push_back(stroke);
             continue;
@@ -1927,8 +1968,10 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
                 strokes_doc_to_mm(layers_doc[i], mapper, prep.layers_mm[i]);
                 strokes_doc_to_mm(layers_doc_baseline[i], mapper, layers_mm_baseline[i]);
                 if (params.contour_to_hatch) {
-                    convert_closed_contours_to_hatch(prep.layers_mm[i], params.hatch_spacing_mm);
-                    convert_closed_contours_to_hatch(layers_mm_baseline[i], params.hatch_spacing_mm);
+                    convert_closed_contours_to_hatch(prep.layers_mm[i], params.hatch_spacing_mm,
+                                                     params.hatch_angle_deg, params.hatch_cross);
+                    convert_closed_contours_to_hatch(layers_mm_baseline[i], params.hatch_spacing_mm,
+                                                     params.hatch_angle_deg, params.hatch_cross);
                 }
             }
             log_grbl_stage_stats_layers("layered", "optimized", "after-doc-to-mm", prep.layers_mm, prep.layer_tool_ids, params);
@@ -2057,8 +2100,10 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     std::vector<std::vector<Geom::Point>> flat_mm_baseline;
     strokes_doc_to_mm(strokes_doc_baseline, mapper, flat_mm_baseline);
     if (params.contour_to_hatch) {
-        convert_closed_contours_to_hatch(prep.flat_mm, params.hatch_spacing_mm);
-        convert_closed_contours_to_hatch(flat_mm_baseline, params.hatch_spacing_mm);
+        convert_closed_contours_to_hatch(prep.flat_mm, params.hatch_spacing_mm, params.hatch_angle_deg,
+                                         params.hatch_cross);
+        convert_closed_contours_to_hatch(flat_mm_baseline, params.hatch_spacing_mm, params.hatch_angle_deg,
+                                         params.hatch_cross);
     }
     log_grbl_stage_stats("flat", "optimized", "after-doc-to-mm", prep.flat_mm, params);
     log_grbl_stage_stats("flat", "baseline", "after-doc-to-mm", flat_mm_baseline, params);
@@ -2669,6 +2714,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     constexpr auto k_opt_dir = "/options/grbl/optimize-stroke-direction";
     constexpr auto k_hatch = "/options/grbl/contour-to-hatch";
     constexpr auto k_hatch_spacing = "/options/grbl/hatch-spacing-mm";
+    constexpr auto k_hatch_angle = "/options/grbl/hatch-angle-deg";
+    constexpr auto k_hatch_cross = "/options/grbl/hatch-cross";
     constexpr auto k_flip = "/options/grbl/flip-y-canvas";
     constexpr auto k_swap_xy = "/options/grbl/swap-xy";
     constexpr auto k_invert_x = "/options/grbl/invert-x";
@@ -2722,6 +2769,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     params.optimize_stroke_direction = prefs->getBool(k_opt_dir, true);
     params.contour_to_hatch = prefs->getBool(k_hatch, false);
     params.hatch_spacing_mm = prefs->getDoubleLimited(k_hatch_spacing, 1.0, 0.05, 100.0);
+    params.hatch_angle_deg = prefs->getDoubleLimited(k_hatch_angle, 0.0, -180.0, 180.0);
+    params.hatch_cross = prefs->getBool(k_hatch_cross, false);
     params.flip_y_canvas = prefs->getBool(k_flip, false);
     params.swap_xy = prefs->getBool(k_swap_xy, false);
     params.invert_x = prefs->getBool(k_invert_x, false);
@@ -2777,7 +2826,7 @@ static bool collect_preview_doc_strokes(SPDocument *doc, GrblExportParams const 
                 if (params.contour_to_hatch) {
                     auto const mapper = build_document_mm_mapper(doc);
                     double const spacing_doc = params.hatch_spacing_mm * mapper.avg_doc_units_per_mm();
-                    convert_closed_contours_to_hatch(layer_doc, spacing_doc);
+                    convert_closed_contours_to_hatch(layer_doc, spacing_doc, params.hatch_angle_deg, params.hatch_cross);
                 }
                 for (auto &st : layer_doc) {
                     if (st.size() >= 2) {
@@ -2805,7 +2854,7 @@ static bool collect_preview_doc_strokes(SPDocument *doc, GrblExportParams const 
     if (params.contour_to_hatch) {
         auto const mapper = build_document_mm_mapper(doc);
         double const spacing_doc = params.hatch_spacing_mm * mapper.avg_doc_units_per_mm();
-        convert_closed_contours_to_hatch(strokes_doc, spacing_doc);
+        convert_closed_contours_to_hatch(strokes_doc, spacing_doc, params.hatch_angle_deg, params.hatch_cross);
     }
     constexpr std::size_t max_strokes = 200000;
     if (strokes_doc.size() > max_strokes) {
