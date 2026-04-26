@@ -37,6 +37,8 @@
 
 #include "inkscape-application.h"
 
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <fstream>
 #include <cerrno>  // History file
@@ -46,8 +48,10 @@
 #include <thread>
 
 #include <giomm/file.h>
+#include <glibmm/fileutils.h>
 #include <glibmm/i18n.h>  // Internationalization
 #include <glibmm/main.h>
+#include <glibmm/miscutils.h>
 #include <gtkmm/application.h>
 
 #include "inkscape-version-info.h"
@@ -61,6 +65,7 @@
 #include "object/sp-namedview.h"
 #include "selection.h"
 #include "path-prefix.h"            // Data directory
+#include "preferences.h"
 
 #include "actions/actions-axidraw.h"
 #include "actions/actions-base.h"
@@ -83,6 +88,7 @@
 #include "actions/actions-transform.h"
 #include "actions/actions-tutorial.h"
 #include "actions/actions-window.h"
+#include "axidraw/pipeline/grbl-export.h"
 #include "debug/logger.h"           // INKSCAPE_DEBUG_LOG support
 #include "extension/db.h"
 #include "extension/effect.h"
@@ -112,6 +118,119 @@
 #endif
 
 using Inkscape::IO::Resource::UIS;
+
+namespace {
+
+constexpr auto k_pref_grbl_layer = "/options/grbl/limit-to-current-layer";
+constexpr std::size_t k_max_grbl_gcode_file_bytes = 32u * 1024u * 1024u;
+
+std::string derive_grbl_export_filename(std::string const &requested_path, std::string const &input_path)
+{
+    if (!requested_path.empty()) {
+        return requested_path;
+    }
+
+    if (!input_path.empty() && input_path != "-") {
+        auto path = std::filesystem::path(input_path);
+        path.replace_extension(".nc");
+        return path.string();
+    }
+
+    return "plot.nc";
+}
+
+void print_grbl_export_summary(std::ostream &os, std::string const &destination,
+                               Inkscape::Axidraw::GrblPlotStats const &stats)
+{
+    os << "GRBL export: " << destination << '\n';
+    os << "  strokes: " << stats.stroke_count << ", layers: " << stats.layer_count;
+    if (stats.tool_change_count > 0) {
+        os << ", tool-changes: " << stats.tool_change_count;
+    }
+    os << '\n';
+
+    if (stats.has_bounds_mm) {
+        os << "  bounds-mm: " << std::fixed << std::setprecision(1) << (stats.max_x_mm - stats.min_x_mm)
+           << " x " << (stats.max_y_mm - stats.min_y_mm) << '\n';
+    }
+
+    if (stats.has_length_stats) {
+        os << "  draw/travel-mm: " << std::fixed << std::setprecision(1) << stats.draw_length_mm << " / "
+           << stats.travel_length_mm;
+        auto const total = stats.draw_length_mm + stats.travel_length_mm;
+        if (total > 1e-9) {
+            os << " (travel " << std::fixed << std::setprecision(1) << ((stats.travel_length_mm / total) * 100.0)
+               << "%)";
+        }
+        os << '\n';
+    }
+
+    if (stats.has_travel_optimization_stats && stats.travel_length_before_optimization_mm > 1e-9) {
+        os << "  optimized-travel-mm: " << std::fixed << std::setprecision(1)
+           << stats.travel_length_before_optimization_mm << " -> " << stats.travel_length_mm;
+        if (stats.travel_length_saved_by_optimization_mm > 1e-9) {
+            os << " (-" << std::fixed << std::setprecision(1) << stats.travel_length_saved_by_optimization_mm
+               << ")";
+        }
+        os << '\n';
+    }
+
+    if (stats.estimated_duration_sec > 0.0) {
+        os << "  estimated-duration-sec: " << std::fixed << std::setprecision(1) << stats.estimated_duration_sec
+           << '\n';
+    }
+}
+
+bool export_grbl_gcode_document(SPDocument *document, SPDesktop *desktop, Inkscape::Selection *selection,
+                                std::string const &input_path, std::string const &requested_output_path)
+{
+    auto *prefs = Inkscape::Preferences::get();
+
+    Inkscape::Axidraw::GrblExportParams params;
+    Inkscape::Axidraw::grbl_export_params_from_preferences(prefs, params);
+
+    Inkscape::Axidraw::GrblExportContext ctx;
+    ctx.desktop = desktop;
+    ctx.selection = selection;
+    ctx.use_current_layer_without_selection = prefs->getBool(k_pref_grbl_layer, false);
+    ctx.cancel = nullptr;
+    ctx.inhibit_interactive_pen_changes = true;
+
+    std::string gcode;
+    std::string err;
+    Inkscape::Axidraw::GrblPlotStats stats{};
+    if (!Inkscape::Axidraw::build_grbl_plot_gcode_string(document, params, ctx, gcode, err, nullptr,
+                                                         k_max_grbl_gcode_file_bytes, &stats)) {
+        std::cerr << "GRBL export failed";
+        if (!err.empty()) {
+            std::cerr << ": " << err;
+        }
+        std::cerr << std::endl;
+        return false;
+    }
+
+    auto const output_path = derive_grbl_export_filename(requested_output_path, input_path);
+    if (output_path == "-") {
+        std::cout << gcode;
+        if (!gcode.empty() && gcode.back() != '\n') {
+            std::cout << '\n';
+        }
+        print_grbl_export_summary(std::cerr, "stdout", stats);
+        return true;
+    }
+
+    try {
+        Glib::file_set_contents(output_path, gcode);
+    } catch (Glib::FileError const &e) {
+        std::cerr << "GRBL export failed to write '" << output_path << "': " << e.what() << std::endl;
+        return false;
+    }
+
+    print_grbl_export_summary(std::cout, output_path, stats);
+    return true;
+}
+
+} // namespace
 
 // This is a bit confusing as there are two ways to handle command line arguments and files
 // depending on if the Gio::Application::Flags::HANDLES_OPEN and/or Gio::Application::Flags::HANDLES_COMMAND_LINE
@@ -656,6 +775,7 @@ InkscapeApplication::InkscapeApplication()
     // Export - File and File Type
     _start_main_option_section(_("File export"));
     gapp->add_main_option_entry(T::OptionType::FILENAME, "export-filename",        'o', N_("Output file name (defaults to input filename; file type is guessed from extension if present; use '-' to write to stdout)"), N_("FILENAME"));
+    gapp->add_main_option_entry(T::OptionType::BOOL,     "export-grbl-gcode",     '\0', N_("Export visible vector geometry as native GRBL G-code using current GRBL preferences"), "");
     gapp->add_main_option_entry(T::OptionType::BOOL,     "export-overwrite",      '\0', N_("Overwrite input file (otherwise add '_out' suffix if type doesn't change)"), "");
     gapp->add_main_option_entry(T::OptionType::STRING,   "export-type",           '\0', N_("File type(s) to export: [svg,png,ps,eps,pdf,emf,wmf,xaml]"), N_("TYPE[,TYPE]*"));
     gapp->add_main_option_entry(T::OptionType::STRING,   "export-extension",      '\0', N_("Extension ID to use for exporting"),                         N_("EXTENSION-ID"));
@@ -926,6 +1046,11 @@ void InkscapeApplication::process_document(SPDocument *document, std::string out
 
     // process_file
     activate_any_actions(_command_line_actions, _gio_application, _active_window, _active_document);
+
+    if (_export_grbl_gcode) {
+        export_grbl_gcode_document(document, _active_desktop, _active_selection, output_path,
+                                   _file_export.export_filename);
+    }
 
     if (_use_shell) {
         shell();
@@ -1461,6 +1586,7 @@ InkscapeApplication::on_handle_local_options(const Glib::RefPtr<Glib::VariantDic
     if (options->contains("pipe")                  ||
 
         options->contains("export-filename")       ||
+        options->contains("export-grbl-gcode")     ||
         options->contains("export-overwrite")      ||
         options->contains("export-type")           ||
         options->contains("export-page")           ||
@@ -1523,9 +1649,10 @@ InkscapeApplication::on_handle_local_options(const Glib::RefPtr<Glib::VariantDic
     if (options->contains("batch-process"))  _batch_process = true;
     if (options->contains("shell"))          _use_shell = true;
     if (options->contains("pipe"))           _use_pipe  = true;
+    if (options->contains("export-grbl-gcode")) _export_grbl_gcode = true;
 
     // Enable auto-export
-    if (options->contains("export-filename")  ||
+    if ((options->contains("export-filename") && !options->contains("export-grbl-gcode")) ||
         options->contains("export-type")      ||
         options->contains("export-overwrite") ||
         options->contains("export-use-hints")

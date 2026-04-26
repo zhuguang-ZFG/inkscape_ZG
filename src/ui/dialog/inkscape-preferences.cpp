@@ -2655,7 +2655,7 @@ void InkscapePreferences::initPageIO()
         _("_Reorder paths to reduce travel (nearest-neighbor)"), "/options/grbl/optimize-stroke-order", true);
     _page_grbl.add_line(
         false, "", _grbl_optimize_order, "",
-        _("Approximate TSP: reorder polylines to reduce rapid moves between them (G0)."),
+        _("Approximate TSP: reorder polylines to reduce rapid moves between them (G0). This is a path-order optimization only: it keeps the same stroke geometry and only changes drawing order."),
         true, reset_icon());
     _grbl_optimize_direction.init(
         _("Allow path _direction reversal during reordering"), "/options/grbl/optimize-stroke-direction", true);

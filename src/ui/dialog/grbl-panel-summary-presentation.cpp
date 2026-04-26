@@ -86,6 +86,21 @@ bool get_plot_lengths_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::
     return true;
 }
 
+bool get_travel_optimization_text(Inkscape::Axidraw::GrblPlotStats const &stats, Glib::ustring &text_out)
+{
+    if (!stats.has_travel_optimization_stats || !(stats.travel_length_before_optimization_mm > 1e-9)) {
+        return false;
+    }
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(1) << stats.travel_length_before_optimization_mm << " -> "
+        << stats.travel_length_mm << " mm";
+    if (stats.travel_length_saved_by_optimization_mm > 1e-9) {
+        out << " (-" << std::fixed << std::setprecision(1) << stats.travel_length_saved_by_optimization_mm << " mm)";
+    }
+    text_out = out.str();
+    return true;
+}
+
 bool get_layout_scale_metrics_from_bounds_mm(double const content_w_mm, double const content_h_mm,
                                              double const bed_width_mm, double const bed_height_mm,
                                              LayoutScaleMetrics &metrics, Glib::ustring &error)
@@ -185,6 +200,11 @@ Glib::ustring build_grbl_job_summary_markup(Inkscape::Axidraw::GrblPlotStats con
         }
         summary << "    " << _("床面占用：X ") << std::fixed << std::setprecision(1) << metrics.fill_x_pct << "%";
         summary << " / Y " << std::fixed << std::setprecision(1) << metrics.fill_y_pct << "%";
+    }
+
+    Glib::ustring travel_optimization;
+    if (get_travel_optimization_text(stats, travel_optimization)) {
+        summary << "\n" << _("路径排序空走：") << travel_optimization;
     }
 
     return summary.str();

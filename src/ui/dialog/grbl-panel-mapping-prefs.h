@@ -22,6 +22,7 @@ struct GrblPanelMappingPrefs
     bool flip_y = false;
     bool align_origin = false;
     bool clip_bed = true;
+    bool lead_in_out = false;
     bool long_pen_up = false;
     bool near_connect = false;
     bool sparse_sampling = false;
@@ -35,6 +36,7 @@ struct GrblPanelMappingPrefs
     double travel_feed = 6000.0;
     double pen_up_delay = 0.0;
     double pen_down_delay = 0.0;
+    double lead_in_out_dist = 0.0;
     std::string pen_up_cmd = "G1 Z0 F3000";
     std::string pen_down_cmd = "G1 Z5 F3000";
     double bed_width = 300.0;

@@ -20,6 +20,8 @@ constexpr auto k_pref_invert_y = "/options/grbl/invert-y";
 constexpr auto k_pref_flip_y = "/options/grbl/flip-y-canvas";
 constexpr auto k_pref_align_origin = "/options/grbl/align-content-min";
 constexpr auto k_pref_clip_bed = "/options/grbl/clip-to-machine-bed";
+constexpr auto k_pref_lead_in_out = "/options/grbl/enable-path-lead-in-out";
+constexpr auto k_pref_lead_in_out_dist = "/options/grbl/path-lead-in-out-distance-mm";
 constexpr auto k_pref_bed_width = "/options/grbl/machine-bed-width-mm";
 constexpr auto k_pref_bed_depth = "/options/grbl/machine-bed-depth-mm";
 constexpr auto k_pref_long_pen_up = "/options/grbl/enable-long-pen-up";
@@ -52,6 +54,7 @@ GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs
     values.flip_y = prefs.getBool(k_pref_flip_y, false);
     values.align_origin = prefs.getBool(k_pref_align_origin, false);
     values.clip_bed = prefs.getBool(k_pref_clip_bed, true);
+    values.lead_in_out = prefs.getBool(k_pref_lead_in_out, false);
     values.long_pen_up = prefs.getBool(k_pref_long_pen_up, false);
     values.near_connect = prefs.getBool(k_pref_near_connect, false);
     values.sparse_sampling = prefs.getBool(k_pref_sparse_sampling, false);
@@ -65,6 +68,7 @@ GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs
     values.travel_feed = prefs.getDoubleLimited(k_pref_travel, 6000.0, 60.0, 20000.0);
     values.pen_up_delay = prefs.getDoubleLimited(k_pref_pen_up_delay, 0.0, 0.0, 5000.0);
     values.pen_down_delay = prefs.getDoubleLimited(k_pref_pen_down_delay, 0.0, 0.0, 5000.0);
+    values.lead_in_out_dist = prefs.getDoubleLimited(k_pref_lead_in_out_dist, 0.0, 0.0, 1000.0);
     values.pen_up_cmd = prefs.getString(k_pref_pen_up, "G1 Z0 F3000");
     values.pen_down_cmd = prefs.getString(k_pref_pen_down, "G1 Z5 F3000");
     values.bed_width = prefs.getDoubleLimited(k_pref_bed_width, 300.0, 1.0, 2000.0);
@@ -89,6 +93,7 @@ void save_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs, GrblPanelMappin
     prefs.setBool(k_pref_flip_y, values.flip_y);
     prefs.setBool(k_pref_align_origin, values.align_origin);
     prefs.setBool(k_pref_clip_bed, values.clip_bed);
+    prefs.setBool(k_pref_lead_in_out, values.lead_in_out);
     prefs.setBool(k_pref_long_pen_up, values.long_pen_up);
     prefs.setBool(k_pref_near_connect, values.near_connect);
     prefs.setBool(k_pref_sparse_sampling, values.sparse_sampling);
@@ -102,6 +107,7 @@ void save_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs, GrblPanelMappin
     prefs.setDouble(k_pref_travel, values.travel_feed);
     prefs.setDouble(k_pref_pen_up_delay, values.pen_up_delay);
     prefs.setDouble(k_pref_pen_down_delay, values.pen_down_delay);
+    prefs.setDouble(k_pref_lead_in_out_dist, values.lead_in_out_dist);
     prefs.setString(k_pref_pen_up, values.pen_up_cmd);
     prefs.setString(k_pref_pen_down, values.pen_down_cmd);
     prefs.setDouble(k_pref_bed_width, values.bed_width);

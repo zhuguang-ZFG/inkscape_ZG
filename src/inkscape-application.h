@@ -138,6 +138,7 @@ protected:
     bool _use_shell   = false;
     bool _use_pipe    = false;
     bool _auto_export = false;
+    bool _export_grbl_gcode = false;
     int _pdf_poppler  = false;
     FontStrategy _pdf_font_strategy = FontStrategy::RENDER_MISSING;
     bool _pdf_convert_colors = false;

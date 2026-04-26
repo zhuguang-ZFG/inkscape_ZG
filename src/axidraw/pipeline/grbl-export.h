@@ -43,6 +43,11 @@ class Selection;
 
 namespace Inkscape::Axidraw {
 
+enum class SparseSamplingStrategy {
+    Legacy,
+    Directional,
+};
+
 class SerialPort;
 
 struct GrblExportParams {
@@ -54,6 +59,9 @@ struct GrblExportParams {
     /// Optional dwell after pen-up / pen-down commands to let the mechanism settle.
     double pen_up_delay_ms = 0.0;
     double pen_down_delay_ms = 0.0;
+    /// Extend the start/end of open strokes so pen-down / pen-up transitions happen outside the intended geometry.
+    bool enable_path_lead_in_out = false;
+    double lead_in_out_distance_mm = 0.0;
     /// Optional higher pen-up move used before long travel moves.
     bool enable_long_pen_up = false;
     double long_pen_up_mm = 10.0;
@@ -64,6 +72,7 @@ struct GrblExportParams {
     /// Keep one stroke out of each group of @a sparse_keep_every to thin dense hatch / line fields.
     bool enable_sparse_stroke_sampling = false;
     int sparse_keep_every = 1;
+    SparseSamplingStrategy sparse_sampling_strategy = SparseSamplingStrategy::Legacy;
     /// Greedy nearest-neighbor ordering of whole polylines to shorten G0 travel (after collect, before send).
     bool optimize_stroke_order = true;
     /// When stroke-order optimization runs, allow reversing each polyline so travel starts from the closer endpoint.
@@ -155,6 +164,9 @@ struct GrblPlotStats {
     bool has_length_stats = false;
     double draw_length_mm = 0;
     double travel_length_mm = 0;
+    bool has_travel_optimization_stats = false;
+    double travel_length_before_optimization_mm = 0;
+    double travel_length_saved_by_optimization_mm = 0;
     double estimated_duration_sec = 0;
 };
 
