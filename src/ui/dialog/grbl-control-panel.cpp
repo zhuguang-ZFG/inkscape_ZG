@@ -266,12 +266,6 @@ Inkscape::Axidraw::GrblExportParams make_export_params_from_preferences()
     return params;
 }
 
-void set_layout_scale_summary_from_stats(Gtk::Label &label, Inkscape::Axidraw::GrblPlotStats const &stats,
-                                         double bed_width_mm, double bed_height_mm)
-{
-    label.set_markup(Inkscape::UI::Dialog::build_grbl_layout_scale_summary_markup(stats, bed_width_mm, bed_height_mm));
-}
-
 Geom::PathVector transform_pathvector_to_desktop(Geom::PathVector const &paths, Geom::Affine const &affine)
 {
     Geom::PathVector transformed;
@@ -1308,7 +1302,7 @@ void GrblControlPanel::refresh_plot_summaries()
     auto const bed_width_mm = _bed_width_spin.get_value();
     auto const bed_height_mm = _bed_depth_spin.get_value();
     _job_summary.set_markup(build_grbl_job_summary_markup(stats, bed_width_mm, bed_height_mm));
-    set_layout_scale_summary_from_stats(_layout_scale_summary, stats, bed_width_mm, bed_height_mm);
+    _layout_scale_summary.set_markup(build_grbl_layout_scale_summary_markup(stats, bed_width_mm, bed_height_mm));
 }
 
 bool GrblControlPanel::has_plot_preview_enabled() const
