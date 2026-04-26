@@ -384,6 +384,7 @@ void GrblControlPanel::documentReplaced()
     clear_grbl_page_restore_state(_page_restore_state);
     update_page_restore_button();
     schedule_plot_feedback_refresh(true);
+    update_editor_gcode_generation_state_status();
 }
 
 void GrblControlPanel::selectionChanged(Inkscape::Selection * /*selection*/)
@@ -1104,17 +1105,24 @@ void GrblControlPanel::refresh_plot_feedback_after_gcode_change()
 
 void GrblControlPanel::clear_editor_gcode_generation_state()
 {
+    _editor_gcode_generation_document = nullptr;
     _editor_gcode_generation_state = {};
     _editor_gcode_generation_state_warned_stale = false;
 }
 
 void GrblControlPanel::remember_editor_gcode_generation_state(Inkscape::Axidraw::GrblExportParams const &params)
 {
+    _editor_gcode_generation_document = getDocument();
     _editor_gcode_generation_state = make_editor_gcode_generation_state(
         params.clip_to_machine_bed, params.swap_xy, params.invert_x, params.invert_y,
         params.flip_y_canvas, params.align_content_min_to_origin,
         params.machine_bed_width_mm, params.machine_bed_depth_mm);
     _editor_gcode_generation_state_warned_stale = false;
+}
+
+bool GrblControlPanel::current_document_matches_editor_gcode_generation_state() const
+{
+    return _editor_gcode_generation_document != nullptr && _editor_gcode_generation_document == getDocument();
 }
 
 bool GrblControlPanel::current_mapping_matches_editor_gcode_generation_state() const
@@ -1126,6 +1134,12 @@ bool GrblControlPanel::current_mapping_matches_editor_gcode_generation_state() c
     return editor_gcode_generation_state_matches(_editor_gcode_generation_state, inputs);
 }
 
+bool GrblControlPanel::current_editor_gcode_generation_state_matches_active_context() const
+{
+    return current_document_matches_editor_gcode_generation_state() &&
+           current_mapping_matches_editor_gcode_generation_state();
+}
+
 void GrblControlPanel::update_editor_gcode_generation_state_status()
 {
     if (!_editor_gcode_generation_state.valid) {
@@ -1133,7 +1147,7 @@ void GrblControlPanel::update_editor_gcode_generation_state_status()
         return;
     }
 
-    if (current_mapping_matches_editor_gcode_generation_state()) {
+    if (current_editor_gcode_generation_state_matches_active_context()) {
         _editor_gcode_generation_state_warned_stale = false;
         return;
     }
@@ -1149,7 +1163,7 @@ void GrblControlPanel::update_editor_gcode_generation_state_status()
 void GrblControlPanel::handle_mapping_preferences_changed(bool const refresh_preview)
 {
     auto const has_generated_state = _editor_gcode_generation_state.valid;
-    auto const mapping_matches = !has_generated_state || current_mapping_matches_editor_gcode_generation_state();
+    auto const mapping_matches = !has_generated_state || current_editor_gcode_generation_state_matches_active_context();
     auto const plan = make_grbl_panel_mapping_change_plan(
         get_runtime_state_view().gcode_active, has_generated_state, mapping_matches,
         _editor_gcode_generation_state_warned_stale, refresh_preview);
@@ -2288,7 +2302,7 @@ void GrblControlPanel::on_send_gcode()
     guard.send_from_cursor = send_from_cursor;
     guard.has_executable_content = std::any_of(text.begin(), text.end(), [](unsigned char c) { return !std::isspace(c); });
     guard.stale_generated_gcode = _editor_gcode_generation_state.valid &&
-                                  !current_mapping_matches_editor_gcode_generation_state();
+                                  !current_editor_gcode_generation_state_matches_active_context();
     guard.check_bed_bounds = _chk_clip_bed.get_active();
     guard.bed_width_mm = _bed_width_spin.get_value();
     guard.bed_height_mm = _bed_depth_spin.get_value();
@@ -2974,7 +2988,6 @@ void GrblControlPanel::build_ui()
     });
     _chk_canvas_plot_preview.signal_toggled().connect([this] { schedule_plot_feedback_refresh(true); });
     _chk_machine_space_preview.signal_toggled().connect([this] { schedule_plot_feedback_refresh(true); });
-    _chk_sync_page_to_bed.signal_toggled().connect([this] { save_mapping_preferences_from_ui(true); });
     _btn_fit_to_bed.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_fit_document_to_bed));
     _btn_center_to_bed.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_center_document_to_bed));
     _btn_restore_page_size.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_restore_page_size));

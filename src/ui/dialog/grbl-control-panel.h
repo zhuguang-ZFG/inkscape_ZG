@@ -54,6 +54,7 @@ struct GrblExportContext;
 } // namespace Inkscape::Axidraw
 
 class SPPage;
+class SPDocument;
 
 namespace Inkscape::UI::Dialog {
 
@@ -173,7 +174,9 @@ private:
     bool get_editor_gcode_text(std::string &text, bool send_from_cursor = false, guint *editor_line_1 = nullptr);
     void clear_editor_gcode_generation_state();
     void remember_editor_gcode_generation_state(Inkscape::Axidraw::GrblExportParams const &params);
+    bool current_document_matches_editor_gcode_generation_state() const;
     bool current_mapping_matches_editor_gcode_generation_state() const;
+    bool current_editor_gcode_generation_state_matches_active_context() const;
     void update_editor_gcode_generation_state_status();
     void handle_mapping_preferences_changed(bool refresh_preview);
     void handle_editor_gcode_changed(bool generated_from_document = false);
@@ -226,6 +229,7 @@ private:
     bool _suspend_editor_gcode_tracking{false};
     bool _editor_gcode_generation_state_warned_stale{false};
     GrblPageRestoreState _page_restore_state;
+    SPDocument *_editor_gcode_generation_document = nullptr;
     EditorGcodeGenerationState _editor_gcode_generation_state;
 
     Gtk::Frame _frame;
