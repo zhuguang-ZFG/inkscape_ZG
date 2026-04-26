@@ -300,23 +300,6 @@ CanvasItemPtr<CanvasItemText> make_preview_axis_label(SPDesktop *desktop, Geom::
     return label;
 }
 
-Glib::RefPtr<Gio::ListStore<Gtk::FileFilter>> create_gcode_file_filters()
-{
-    auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-    auto gcode = Gtk::FileFilter::create();
-    gcode->set_name(_("G-code 文件"));
-    for (auto const *suffix : {"nc", "gcode", "tap", "cnc", "txt"}) {
-        gcode->add_suffix(suffix);
-    }
-    filters->append(gcode);
-
-    auto all = Gtk::FileFilter::create();
-    all->set_name(_("所有文件"));
-    all->add_pattern("*");
-    filters->append(all);
-    return filters;
-}
-
 /// Last folder for G-code save/open dialogs in this panel.
 constexpr auto k_pref_save_gcode_dir = "/dialogs/grblcontrol/save_gcode_dir";
 constexpr std::size_t k_max_gcode_editor_bytes = 32u * 1024u * 1024u;
@@ -2229,7 +2212,17 @@ void GrblControlPanel::on_load_gcode_from_file()
 
     std::string folder;
     Inkscape::UI::Dialog::get_start_directory(folder, k_pref_save_gcode_dir, true);
-    auto filters = create_gcode_file_filters();
+    auto filters = Gio::ListStore<Gtk::FileFilter>::create();
+    auto gcode = Gtk::FileFilter::create();
+    gcode->set_name(_("G-code 文件"));
+    for (auto const *suffix : {"nc", "gcode", "tap", "cnc", "txt"}) {
+        gcode->add_suffix(suffix);
+    }
+    filters->append(gcode);
+    auto all = Gtk::FileFilter::create();
+    all->set_name(_("所有文件"));
+    all->add_pattern("*");
+    filters->append(all);
     Glib::RefPtr<Gio::File> const src = choose_file_open(_("载入 G-code"), win, filters, folder, _("打开"));
     if (!src) {
         return;
@@ -2279,7 +2272,17 @@ void GrblControlPanel::on_save_gcode_as()
 
     std::string folder;
     Inkscape::UI::Dialog::get_start_directory(folder, k_pref_save_gcode_dir, true);
-    auto filters = create_gcode_file_filters();
+    auto filters = Gio::ListStore<Gtk::FileFilter>::create();
+    auto gcode = Gtk::FileFilter::create();
+    gcode->set_name(_("G-code 文件"));
+    for (auto const *suffix : {"nc", "gcode", "tap", "cnc", "txt"}) {
+        gcode->add_suffix(suffix);
+    }
+    filters->append(gcode);
+    auto all = Gtk::FileFilter::create();
+    all->set_name(_("所有文件"));
+    all->add_pattern("*");
+    filters->append(all);
 
     char const *document_filename = nullptr;
     if (auto *d = getDocument()) {
