@@ -101,10 +101,6 @@ using Inkscape::choose_file_save;
 
 namespace {
 
-constexpr double k_mm_per_in = 25.4;
-constexpr double k_px_per_in = 96.0;
-constexpr double k_mm_per_px = k_mm_per_in / k_px_per_in;
-
 void append_axis_arrow(Geom::PathVector &paths, Geom::Point const &from, Geom::Point const &to, double head_len, double head_width)
 {
     Geom::Path shaft(from);
@@ -146,29 +142,6 @@ bool send_link_lines(Inkscape::Axidraw::GrblLink &link, std::initializer_list<st
             return link.send_line_wait_ok(line, line_err_out);
         },
         lines, err_out);
-}
-
-Glib::ustring format_duration_compact(double seconds)
-{
-    if (!(seconds > 0.0)) {
-        return _("未估算");
-    }
-    auto const rounded = static_cast<long long>(std::llround(seconds));
-    long long const hours = rounded / 3600;
-    long long const minutes = (rounded % 3600) / 60;
-    long long const secs = rounded % 60;
-    Glib::ustring out;
-    if (hours > 0) {
-        out += std::to_string(hours);
-        out += "小时";
-    }
-    if (minutes > 0 || hours > 0) {
-        out += std::to_string(minutes);
-        out += "分";
-    }
-    out += std::to_string(secs);
-    out += "秒";
-    return out;
 }
 
 void trim_in_place(std::string &s)
@@ -293,51 +266,6 @@ Inkscape::Axidraw::GrblExportParams make_export_params_from_preferences()
     return params;
 }
 
-bool get_document_content_bounds(SPDocument *doc, Geom::Rect &bounds, Glib::ustring &error,
-                                 Glib::ustring const &empty_message)
-{
-    if (!doc) {
-        error = _("没有活动文档。");
-        return false;
-    }
-    auto bounds_opt = doc->preferredBounds();
-    if (!bounds_opt) {
-        error = empty_message;
-        return false;
-    }
-    bounds = *bounds_opt;
-    if (!(bounds.width() > 1e-9) || !(bounds.height() > 1e-9)) {
-        error = _("当前文档没有有效的绘图范围。");
-        return false;
-    }
-    return true;
-}
-
-bool get_bed_size_in_document_units(SPDocument *doc, double bed_width_mm, double bed_height_mm,
-                                    double &bed_w_doc, double &bed_h_doc)
-{
-    if (!doc) {
-        return false;
-    }
-
-    auto const viewbox = doc->getViewBox();
-    auto const page_px = doc->getDimensions();
-    double const page_w_mm = page_px[Geom::X] * k_mm_per_px;
-    double const page_h_mm = page_px[Geom::Y] * k_mm_per_px;
-
-    if (viewbox.width() > 1e-9 && viewbox.height() > 1e-9 &&
-        page_w_mm > 1e-9 && page_h_mm > 1e-9) {
-        // Keep UI-side bed conversion aligned with the export mapper's doc<->mm basis.
-        bed_w_doc = bed_width_mm * (viewbox.width() / page_w_mm);
-        bed_h_doc = bed_height_mm * (viewbox.height() / page_h_mm);
-    } else {
-        // Fallback to SVG px user units if viewBox/page dimensions are not usable.
-        bed_w_doc = bed_width_mm / k_mm_per_px;
-        bed_h_doc = bed_height_mm / k_mm_per_px;
-    }
-    return bed_w_doc > 1e-9 && bed_h_doc > 1e-9;
-}
-
 void setup_summary_label(Gtk::Label &label, Glib::ustring const &initial_markup, int margin_top, int margin_bottom)
 {
     label.set_halign(Gtk::Align::START);
@@ -349,20 +277,6 @@ void setup_summary_label(Gtk::Label &label, Glib::ustring const &initial_markup,
     label.set_margin_top(margin_top);
     label.set_margin_bottom(margin_bottom);
     label.set_markup(initial_markup);
-}
-
-bool get_document_bounds_and_bed(SPDocument *doc, double bed_width_mm, double bed_height_mm, Geom::Rect &bounds,
-                                 double &bed_w_doc, double &bed_h_doc, Glib::ustring &error,
-                                 Glib::ustring const &empty_message)
-{
-    if (!get_document_content_bounds(doc, bounds, error, empty_message)) {
-        return false;
-    }
-    if (!get_bed_size_in_document_units(doc, bed_width_mm, bed_height_mm, bed_w_doc, bed_h_doc)) {
-        error = _("机器行程无效，请先同步或设置床面宽度/深度。");
-        return false;
-    }
-    return true;
 }
 
 void set_layout_scale_summary_from_stats(Gtk::Label &label, Inkscape::Axidraw::GrblPlotStats const &stats,
