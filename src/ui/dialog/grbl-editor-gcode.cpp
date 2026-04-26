@@ -169,6 +169,19 @@ bool analyze_editor_gcode_bounds_mm(std::string const &text, EditorGcodeBounds &
     return true;
 }
 
+std::size_t count_executable_editor_gcode_lines(std::string const &text, std::size_t const max_lines)
+{
+    std::size_t count = 0;
+    for_each_executable_gcode_line(text, [&](std::string const &) {
+        ++count;
+    });
+
+    if (max_lines > 0 && count > max_lines) {
+        return max_lines + 1;
+    }
+    return count;
+}
+
 Glib::ustring build_editor_gcode_out_of_bed_message(EditorGcodeBounds const &bounds, double const bed_w_mm,
                                                     double const bed_h_mm)
 {

@@ -25,7 +25,6 @@
 #include <string>
 #include <thread>
 #include <mutex>
-#include <type_traits>
 #include <vector>
 
 #include <glib.h>
@@ -202,29 +201,6 @@ bool should_skip_gcode_line(std::string const &s)
     return false;
 }
 
-template <typename Func>
-void for_each_executable_gcode_line(std::string const &text, Func &&func)
-{
-    std::istringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        trim_in_place(line);
-        if (should_skip_gcode_line(line)) {
-            continue;
-        }
-        if constexpr (std::is_same_v<std::invoke_result_t<Func &, std::string const &>, bool>) {
-            if (!func(line)) {
-                break;
-            }
-        } else {
-            func(line);
-        }
-    }
-}
-
 std::string detect_radio_mode_from_reply(std::string reply)
 {
     for (auto &c : reply) {
@@ -255,24 +231,6 @@ std::string detect_radio_mode_from_reply(std::string reply)
 }
 
 constexpr std::size_t k_max_gcode_stream_lines = 200000;
-
-/// Counts lines that `on_send_gcode` would send (same skip rules). Returns @c k_max_gcode_stream_lines + 1 if more
-/// than that many executable lines exist.
-std::size_t count_executable_gcode_lines(std::string const &text)
-{
-    std::size_t n = 0;
-    bool const finished = [&] {
-        for_each_executable_gcode_line(text, [&](std::string const &) {
-            ++n;
-            return n <= k_max_gcode_stream_lines;
-        });
-        return n <= k_max_gcode_stream_lines;
-    }();
-    if (!finished) {
-        return k_max_gcode_stream_lines + 1;
-    }
-    return n;
-}
 
 constexpr std::size_t k_preview_max_strokes = 12000;
 
@@ -2579,7 +2537,7 @@ void GrblControlPanel::on_send_gcode()
         return;
     }
 
-    std::size_t const total_exec = count_executable_gcode_lines(text);
+    std::size_t const total_exec = count_executable_editor_gcode_lines(text, k_max_gcode_stream_lines);
     if (!begin_gcode_stream_ui(GrblGcodeStartOrigin::editor_gcode)) {
         return;
     }

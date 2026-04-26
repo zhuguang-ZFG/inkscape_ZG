@@ -7,6 +7,7 @@
 using Inkscape::UI::Dialog::EditorGcodeBounds;
 using Inkscape::UI::Dialog::analyze_editor_gcode_bounds_mm;
 using Inkscape::UI::Dialog::build_editor_gcode_out_of_bed_message;
+using Inkscape::UI::Dialog::count_executable_editor_gcode_lines;
 using Inkscape::UI::Dialog::nearly_equal_mm;
 
 TEST(GrblEditorGcodeTest, TracksAbsoluteAndRelativeMovesInMillimeters)
@@ -61,4 +62,17 @@ TEST(GrblEditorGcodeTest, NearlyEqualUsesTolerance)
 {
     EXPECT_TRUE(nearly_equal_mm(10.0, 10.0 + 5e-7));
     EXPECT_FALSE(nearly_equal_mm(10.0, 10.0 + 5e-4));
+}
+
+TEST(GrblEditorGcodeTest, ExecutableLineCountSkipsCommentsAndCanClamp)
+{
+    auto const text =
+        "; comment\n"
+        "(comment)\n"
+        " \n"
+        "G0 X1\n"
+        "G1 Y2\n";
+
+    EXPECT_EQ(count_executable_editor_gcode_lines(text, 10), 2u);
+    EXPECT_EQ(count_executable_editor_gcode_lines(text, 1), 2u);
 }
