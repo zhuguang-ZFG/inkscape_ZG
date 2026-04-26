@@ -58,6 +58,24 @@ TEST(GrblPanelFirmwareSyncStateTest, RequestPlanUnifiesManualAndConnectTriggers)
     EXPECT_FALSE(delayed_busy.keep_delayed_request);
 }
 
+TEST(GrblPanelFirmwareSyncStateTest, ConnectSuccessKeepsDelayedSyncWhenStreamingBlocksImmediateStart)
+{
+    auto const blocked = make_grbl_firmware_sync_request_plan(
+        GrblFirmwareSyncRequestOrigin::connect_success, true, GrblRuntimePhase::gcode_sending);
+
+    EXPECT_FALSE(blocked.start_now);
+    EXPECT_TRUE(blocked.keep_delayed_request);
+}
+
+TEST(GrblPanelFirmwareSyncStateTest, DelayedConnectNeverStartsAfterDisconnect)
+{
+    auto const plan = make_grbl_firmware_sync_request_plan(
+        GrblFirmwareSyncRequestOrigin::delayed_connect, false, GrblRuntimePhase::idle);
+
+    EXPECT_FALSE(plan.start_now);
+    EXPECT_FALSE(plan.keep_delayed_request);
+}
+
 TEST(GrblPanelFirmwareSyncStateTest, MappingUpdateExtractsUiRelevantValues)
 {
     GrblFirmwareSnapshot snapshot;

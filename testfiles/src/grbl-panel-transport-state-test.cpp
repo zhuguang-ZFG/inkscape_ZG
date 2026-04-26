@@ -17,6 +17,19 @@ TEST(GrblPanelTransportStateTest, FirmwareSyncStartStopsPollingAndMarksActivity)
     EXPECT_FALSE(plan.poll_enabled);
 }
 
+TEST(GrblPanelTransportStateTest, PlansStayUnchangedWhenNoLinkExists)
+{
+    auto const sync_start = make_transport_plan_for_firmware_sync_start(false);
+    EXPECT_EQ(sync_start.activity, GrblPanelLinkActivityState::unchanged);
+    EXPECT_TRUE(sync_start.update_poll);
+    EXPECT_FALSE(sync_start.poll_enabled);
+
+    auto const stream_start = make_transport_plan_for_gcode_stream(true, false, true, false);
+    EXPECT_EQ(stream_start.activity, GrblPanelLinkActivityState::unchanged);
+    EXPECT_TRUE(stream_start.update_poll);
+    EXPECT_FALSE(stream_start.poll_enabled);
+}
+
 TEST(GrblPanelTransportStateTest, FirmwareSyncCompleteResumesPollingOnlyForActiveConnection)
 {
     auto const connected = make_transport_plan_for_firmware_sync_complete(true, true, true);
