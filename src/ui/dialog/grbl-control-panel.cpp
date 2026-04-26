@@ -365,29 +365,10 @@ bool get_document_bounds_and_bed(SPDocument *doc, double bed_width_mm, double be
     return true;
 }
 
-void set_markup_message(Gtk::Label &label, Glib::ustring const &title, Glib::ustring const &message)
-{
-    label.set_markup(Glib::ustring::compose("<b>%1</b>\n%2", title, Glib::Markup::escape_text(message)));
-}
-
 void set_layout_scale_summary_from_stats(Gtk::Label &label, Inkscape::Axidraw::GrblPlotStats const &stats,
                                          double bed_width_mm, double bed_height_mm)
 {
     label.set_markup(Inkscape::UI::Dialog::build_grbl_layout_scale_summary_markup(stats, bed_width_mm, bed_height_mm));
-}
-
-void set_no_active_document_summaries(Gtk::Label &job_summary, Gtk::Label &layout_scale_summary)
-{
-    job_summary.set_markup(_("<b>任务概览</b>\n暂无活动文档。"));
-    layout_scale_summary.set_markup(_("<b>当前缩放</b>\n暂无活动文档。"));
-}
-
-void set_analysis_error_summaries(Gtk::Label &job_summary, Gtk::Label &layout_scale_summary, std::string const &err)
-{
-    auto const job_message = err.empty() ? _("当前无法估算任务信息。") : Glib::ustring(err);
-    auto const scale_message = err.empty() ? _("当前无法估算缩放信息。") : Glib::ustring(err);
-    set_markup_message(job_summary, _("任务概览"), job_message);
-    set_markup_message(layout_scale_summary, _("当前缩放"), scale_message);
 }
 
 Geom::PathVector transform_pathvector_to_desktop(Geom::PathVector const &paths, Geom::Affine const &affine)
@@ -470,74 +451,6 @@ struct GrblFirmwareSnapshot {
     double y_travel_mm = 0;
     Glib::ustring display_text;
 };
-
-bool parse_grbl_setting_line(std::string const &line, int &code_out, std::string &value_out)
-{
-    if (line.size() < 4 || line[0] != '$') {
-        return false;
-    }
-    auto const eq = line.find('=');
-    if (eq == std::string::npos || eq <= 1) {
-        return false;
-    }
-    try {
-        code_out = std::stoi(line.substr(1, eq - 1));
-    } catch (...) {
-        return false;
-    }
-    value_out = line.substr(eq + 1);
-    trim_in_place(value_out);
-    return true;
-}
-
-bool parse_double_c(std::string const &text, double &value_out)
-{
-    char *end = nullptr;
-    auto const value = std::strtod(text.c_str(), &end);
-    if (!end || end == text.c_str()) {
-        return false;
-    }
-    while (*end == ' ' || *end == '\t') {
-        ++end;
-    }
-    if (*end != '\0' || !std::isfinite(value)) {
-        return false;
-    }
-    value_out = value;
-    return true;
-}
-
-Glib::ustring build_firmware_snapshot_text(std::vector<std::string> const &info_lines,
-                                          std::vector<std::string> const &modal_lines,
-                                          std::vector<std::string> const &offset_lines,
-                                          std::vector<std::string> const &setting_lines,
-                                          std::vector<std::string> const &errors)
-{
-    std::ostringstream out;
-    auto append_section = [&out](char const *title, std::vector<std::string> const &lines) {
-        if (lines.empty()) {
-            return;
-        }
-        out << "[" << title << "]\n";
-        for (auto const &line : lines) {
-            out << line << "\n";
-        }
-        out << "\n";
-    };
-    append_section("I", info_lines);
-    append_section("G", modal_lines);
-    append_section("#", offset_lines);
-    append_section("$", setting_lines);
-    if (!errors.empty()) {
-        out << "[errors]\n";
-        for (auto const &line : errors) {
-            out << line << "\n";
-        }
-    }
-    auto const text = out.str();
-    return text.empty() ? Glib::ustring(_("尚未读取固件参数。")) : Glib::ustring(text);
-}
-
 
 } // namespace
 
@@ -1511,7 +1424,8 @@ void GrblControlPanel::refresh_plot_summaries()
     auto *doc = getDocument();
     auto *desktop = getDesktop();
     if (!doc || !desktop) {
-        set_no_active_document_summaries(_job_summary, _layout_scale_summary);
+        _job_summary.set_markup(build_grbl_no_active_document_job_summary_markup());
+        _layout_scale_summary.set_markup(build_grbl_no_active_document_scale_summary_markup());
         return;
     }
 
@@ -1520,7 +1434,8 @@ void GrblControlPanel::refresh_plot_summaries()
     GrblPlotStats stats{};
     std::string err;
     if (!analyze_grbl_plot(doc, session.params, session.context, stats, err)) {
-        set_analysis_error_summaries(_job_summary, _layout_scale_summary, err);
+        _job_summary.set_markup(build_grbl_analysis_error_job_summary_markup(err));
+        _layout_scale_summary.set_markup(build_grbl_analysis_error_scale_summary_markup(err));
         return;
     }
 

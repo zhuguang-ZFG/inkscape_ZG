@@ -110,6 +110,11 @@ bool get_layout_scale_metrics_from_bounds_mm(double const content_w_mm, double c
     return true;
 }
 
+Glib::ustring build_summary_markup(Glib::ustring const &title, Glib::ustring const &message)
+{
+    return Glib::ustring::compose("<b>%1</b>\n%2", title, Glib::Markup::escape_text(message));
+}
+
 } // namespace
 
 Glib::ustring build_grbl_layout_scale_summary_markup(Inkscape::Axidraw::GrblPlotStats const &stats,
@@ -202,6 +207,28 @@ Glib::ustring build_grbl_fill_gcode_status(std::size_t const strokes, Inkscape::
     }
     return Glib::ustring::compose(_("编辑器已为 %1 条笔画生成 G-code。请先检查内容，确认后再“发送到机器”。"),
                                   static_cast<guint64>(strokes));
+}
+
+Glib::ustring build_grbl_no_active_document_job_summary_markup()
+{
+    return _("<b>任务概览</b>\n暂无活动文档。");
+}
+
+Glib::ustring build_grbl_no_active_document_scale_summary_markup()
+{
+    return _("<b>当前缩放</b>\n暂无活动文档。");
+}
+
+Glib::ustring build_grbl_analysis_error_job_summary_markup(std::string const &err)
+{
+    auto const message = err.empty() ? _("当前无法估算任务信息。") : Glib::ustring(err);
+    return build_summary_markup(_("任务概览"), message);
+}
+
+Glib::ustring build_grbl_analysis_error_scale_summary_markup(std::string const &err)
+{
+    auto const message = err.empty() ? _("当前无法估算缩放信息。") : Glib::ustring(err);
+    return build_summary_markup(_("当前缩放"), message);
 }
 
 } // namespace Inkscape::UI::Dialog

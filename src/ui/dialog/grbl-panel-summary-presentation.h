@@ -18,6 +18,10 @@ Glib::ustring build_grbl_layout_scale_summary_markup(Inkscape::Axidraw::GrblPlot
 Glib::ustring build_grbl_job_summary_markup(Inkscape::Axidraw::GrblPlotStats const &stats, double bed_width_mm,
                                             double bed_height_mm);
 Glib::ustring build_grbl_fill_gcode_status(std::size_t strokes, Inkscape::Axidraw::GrblPlotStats const &stats);
+Glib::ustring build_grbl_no_active_document_job_summary_markup();
+Glib::ustring build_grbl_no_active_document_scale_summary_markup();
+Glib::ustring build_grbl_analysis_error_job_summary_markup(std::string const &err);
+Glib::ustring build_grbl_analysis_error_scale_summary_markup(std::string const &err);
 
 } // namespace Inkscape::UI::Dialog
 
