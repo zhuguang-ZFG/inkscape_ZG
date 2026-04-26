@@ -6,6 +6,7 @@
 using Inkscape::UI::Dialog::EditorGcodeGenerationInputs;
 using Inkscape::UI::Dialog::EditorGcodeGenerationState;
 using Inkscape::UI::Dialog::build_editor_gcode_stale_mapping_message;
+using Inkscape::UI::Dialog::editor_gcode_generation_context_matches;
 using Inkscape::UI::Dialog::editor_gcode_generation_state_matches;
 using Inkscape::UI::Dialog::make_editor_gcode_generation_inputs;
 using Inkscape::UI::Dialog::make_editor_gcode_generation_state;
@@ -51,6 +52,18 @@ TEST(GrblEditorGenerationStateTest, InvalidStateNeverMatches)
     auto const inputs = make_editor_gcode_generation_inputs(false, false, false, false, false, false, 300.0, 200.0);
 
     EXPECT_FALSE(editor_gcode_generation_state_matches(state, inputs));
+    EXPECT_FALSE(editor_gcode_generation_context_matches(state, inputs, true));
+}
+
+TEST(GrblEditorGenerationStateTest, ContextMatchesOnlyWhenDocumentAndMappingStillMatch)
+{
+    auto const state = make_editor_gcode_generation_state(true, false, true, false, true, false, 300.0, 200.0);
+    auto const same = make_editor_gcode_generation_inputs(true, false, true, false, true, false, 300.0, 200.0);
+    auto const changed = make_editor_gcode_generation_inputs(true, true, true, false, true, false, 300.0, 200.0);
+
+    EXPECT_TRUE(editor_gcode_generation_context_matches(state, same, true));
+    EXPECT_FALSE(editor_gcode_generation_context_matches(state, same, false));
+    EXPECT_FALSE(editor_gcode_generation_context_matches(state, changed, true));
 }
 
 TEST(GrblEditorGenerationStateTest, BuildsStaleMappingMessage)

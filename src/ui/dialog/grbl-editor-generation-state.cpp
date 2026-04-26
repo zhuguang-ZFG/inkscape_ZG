@@ -64,6 +64,13 @@ bool editor_gcode_generation_state_matches(EditorGcodeGenerationState const &sta
            nearly_equal_mm(state.machine_bed_depth_mm, inputs.machine_bed_depth_mm);
 }
 
+bool editor_gcode_generation_context_matches(EditorGcodeGenerationState const &state,
+                                             EditorGcodeGenerationInputs const &inputs,
+                                             bool const document_matches)
+{
+    return document_matches && editor_gcode_generation_state_matches(state, inputs);
+}
+
 Glib::ustring build_editor_gcode_stale_mapping_message()
 {
     return _("编辑器中的 G-code 是按之前的床面/映射设置生成的，和当前设置不一致。\n\n"

@@ -1136,8 +1136,12 @@ bool GrblControlPanel::current_mapping_matches_editor_gcode_generation_state() c
 
 bool GrblControlPanel::current_editor_gcode_generation_state_matches_active_context() const
 {
-    return current_document_matches_editor_gcode_generation_state() &&
-           current_mapping_matches_editor_gcode_generation_state();
+    auto const inputs = make_editor_gcode_generation_inputs(
+        _chk_clip_bed.get_active(), _chk_swap_xy.get_active(), _chk_invert_x.get_active(),
+        _chk_invert_y.get_active(), _chk_flip_y.get_active(), _chk_align_origin.get_active(),
+        _bed_width_spin.get_value(), _bed_depth_spin.get_value());
+    return editor_gcode_generation_context_matches(
+        _editor_gcode_generation_state, inputs, current_document_matches_editor_gcode_generation_state());
 }
 
 void GrblControlPanel::update_editor_gcode_generation_state_status()

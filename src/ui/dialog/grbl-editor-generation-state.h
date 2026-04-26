@@ -44,6 +44,9 @@ EditorGcodeGenerationInputs make_editor_gcode_generation_inputs(bool clip_to_mac
                                                                 double bed_depth_mm);
 bool editor_gcode_generation_state_matches(EditorGcodeGenerationState const &state,
                                            EditorGcodeGenerationInputs const &inputs);
+bool editor_gcode_generation_context_matches(EditorGcodeGenerationState const &state,
+                                             EditorGcodeGenerationInputs const &inputs,
+                                             bool document_matches);
 Glib::ustring build_editor_gcode_stale_mapping_message();
 
 } // namespace Inkscape::UI::Dialog
