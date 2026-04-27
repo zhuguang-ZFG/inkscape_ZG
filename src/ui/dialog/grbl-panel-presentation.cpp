@@ -20,12 +20,12 @@ GrblActionButtonsPresentation make_grbl_action_buttons_presentation(GrblRuntimeS
     presentation.send_gcode.label = sending || cancelling ? _("发送中...") : _("发送到机器(_S)");
     presentation.send_from_drawing.label = sending || cancelling ? _("图稿发送中...") : _("从图稿直接发送");
     presentation.read_firmware.label = state.firmware_sync ? _("同步中...") : _("同步绘图机参数");
-    presentation.cancel_gcode.label = state.cancel_requested ? _("停止请求中...") : _("取消发送(_C)");
+    presentation.cancel_gcode.label = state.cancel_requested ? _("停止请求中...") : _("停止发送(_C)");
     presentation.cancel_gcode.tooltip = _("设置取消标记；当前这一行仍可能执行完后才会停止发送。");
 
     if (sending || cancelling) {
-        presentation.send_gcode.tooltip = _("当前正在发送编辑器中的 G-code；如需停止，请使用旁边的“取消发送”。");
-        presentation.send_from_drawing.tooltip = _("当前正在执行图稿直发；如需停止，请使用“取消发送”。");
+        presentation.send_gcode.tooltip = _("当前正在发送编辑器中的 G-code；如需停止，请使用旁边的“停止发送”。");
+        presentation.send_from_drawing.tooltip = _("当前正在执行图稿直发；如需停止，请使用“停止发送”。");
     } else {
         presentation.send_gcode.tooltip =
             _("按顺序发送每一条非空行，并在发送下一行前等待 Grbl 返回 ok（或错误）。"

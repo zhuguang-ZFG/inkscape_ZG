@@ -2828,7 +2828,7 @@ void GrblControlPanel::build_ui()
 
     _btn_mech_home.set_tooltip_text(_("回零：执行 $H（必须正确配置限位开关和安全间距）。"));
     _btn_yp.set_tooltip_text(_("Y 正向点动：先用相对模式 G1，再恢复为绝对模式 G90。"));
-    _btn_set_origin.set_tooltip_text(_("G92：将当前位置设为工作零点（X0 Y0 Z0）。"));
+    _btn_set_origin.set_tooltip_text(_("G92：将当前位置设为工作零点（仅 X0 Y0，不改 Z）。"));
     _btn_goto_work_zero.set_tooltip_text(_("G90 G0：以毫米单位（G21）快速移动到工作坐标 X0 Y0。"));
     _btn_goto_work_zero.set_icon_name("go-home-symbolic");
     _btn_xm.set_tooltip_text(_("按设定步长以毫米为单位向 X 负方向点动。"));
@@ -3475,6 +3475,8 @@ void GrblControlPanel::build_ui()
             if (!send_link_lines(*_link, {"G21", "G92 X0 Y0"}, e)) {
                 return;
             }
+            schedule_plot_feedback_refresh(true);
+            post_status(_("已将当前位置设为工作零点（X0 Y0，未改 Z）。"), false);
         });
     });
     _btn_goto_work_zero.signal_clicked().connect([this] {
@@ -3483,6 +3485,8 @@ void GrblControlPanel::build_ui()
                 if (!send_link_lines(*_link, {"G21", "G90", "G0 X0 Y0"}, e)) {
                     return;
                 }
+                schedule_plot_feedback_refresh(true);
+                post_status(_("已移动到工作 XY 零点。"), false);
             });
     });
     _btn_reset.signal_clicked().connect([this] { soft_reset(); });
