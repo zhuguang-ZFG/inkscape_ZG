@@ -36,6 +36,7 @@
 #include "ui/dialog/grbl-panel-connection-state.h"
 #include "ui/dialog/grbl-panel-document-geometry.h"
 #include "ui/dialog/grbl-panel-export-session.h"
+#include "ui/dialog/grbl-panel-feedback-trigger-state.h"
 #include "ui/dialog/grbl-panel-firmware-sync-state.h"
 #include "ui/dialog/grbl-panel-job-guard.h"
 #include "ui/dialog/grbl-work-origin.h"
@@ -207,6 +208,7 @@ private:
                                     Geom::Affine const &affine);
     void schedule_plot_feedback_refresh(bool refresh_preview = true);
     void refresh_plot_feedback(bool refresh_preview = true);
+    void request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger trigger, bool refresh_preview = true);
     bool begin_gcode_stream_ui(GrblGcodeStartOrigin origin);
     void post_gcode_stream_result(std::string const &err);
     void join_gcode_stream_thread();

@@ -135,6 +135,7 @@ target_sources(inkscape_base PRIVATE
 	dialog/grbl-work-origin.cpp
 	dialog/grbl-panel-export-session.cpp
 	dialog/grbl-panel-feedback-state.cpp
+	dialog/grbl-panel-feedback-trigger-state.cpp
 	dialog/grbl-panel-feedback-presentation.cpp
 	dialog/grbl-panel-summary-presentation.cpp
 	dialog/grbl-panel-firmware-sync-state.cpp
@@ -385,6 +386,7 @@ target_sources(inkscape_base PRIVATE
 	dialog/grbl-panel-document-geometry.h
 	dialog/grbl-panel-document-layout.h
 	dialog/grbl-panel-feedback-state.h
+	dialog/grbl-panel-feedback-trigger-state.h
 	dialog/grbl-panel-feedback-presentation.h
 	dialog/grbl-panel-summary-presentation.h
 	dialog/grbl-panel-firmware-sync-state.h
