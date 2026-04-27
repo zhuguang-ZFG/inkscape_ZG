@@ -3059,7 +3059,7 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
     if (!emit_line("G90")) {
         return false;
     }
-    if (!emit_line("G92 X0 Y0 Z0")) {
+    if (!emit_line("G92 X0 Y0")) {
         return false;
     }
     if (!emit_custom_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, params.start_gcode)) {
@@ -3152,7 +3152,7 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
     if (!emit_line("G90")) {
         return false;
     }
-    if (!emit_line("G92 X0 Y0 Z0")) {
+    if (!emit_line("G92 X0 Y0")) {
         return false;
     }
     if (!emit_custom_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, params.start_gcode)) {
@@ -3438,8 +3438,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
             params.pen_down_cmd = "M3 S1000";
             params.enable_long_pen_up = false;
         } else {
-            params.pen_up_cmd = prefs->getString(k_pen_up, "G1 Z0 F3000");
-            params.pen_down_cmd = prefs->getString(k_pen_dn, "G1 Z5 F3000");
+            params.pen_up_cmd = prefs->getString(k_pen_up, "G90\nG1 Z0 F1200");
+            params.pen_down_cmd = prefs->getString(k_pen_dn, "G90\nG1 Z5 F1200");
             params.enable_long_pen_up = prefs->getBool(k_long_pen_up, false);
         }
     }

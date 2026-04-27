@@ -18,7 +18,7 @@
  * assume packet parity with that Java.
  *
  * **Pen control mode** (`/options/grbl/pen-control`, default `z`):
- * - `z` — use preferences `pen-up-cmd` / `pen-down-cmd` (defaults `G1 Z0 F3000` / `G1 Z5 F3000`).
+ * - `z` — use preferences `pen-up-cmd` / `pen-down-cmd` (defaults `G90\nG1 Z0 F1200` / `G90\nG1 Z5 F1200`).
  * - `m3m5` — fixed `M5` (up) and `M3 S1000` (down), matching `PAIXI_PEN_M3_M5_CONTROL` in
  *   `Spindles/NullSpindle.cpp` (M3 → pen-down Z, M5 → pen-up Z) without sending raw Z lines.
  */
@@ -54,8 +54,8 @@ struct GrblExportParams {
     double flatness = 0.08;
     double feed_draw_mm_min = 1200.0;
     double feed_travel_mm_min = 6000.0;
-    Glib::ustring pen_up_cmd = "G1 Z0 F3000";
-    Glib::ustring pen_down_cmd = "G1 Z5 F3000";
+    Glib::ustring pen_up_cmd = "G90\nG1 Z0 F1200";
+    Glib::ustring pen_down_cmd = "G90\nG1 Z5 F1200";
     /// Optional dwell after pen-up / pen-down commands to let the mechanism settle.
     double pen_up_delay_ms = 0.0;
     double pen_down_delay_ms = 0.0;

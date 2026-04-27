@@ -55,8 +55,8 @@ struct GrblPanelMappingPrefs
     double hatch_angle = 0.0;
     double hatch_inset = 0.1;
     double hatch_angle_increment = 5.0;
-    std::string pen_up_cmd = "G1 Z0 F3000";
-    std::string pen_down_cmd = "G1 Z5 F3000";
+    std::string pen_up_cmd = "G90\nG1 Z0 F1200";
+    std::string pen_down_cmd = "G90\nG1 Z5 F1200";
     std::string bed_preset = "A4";
     double bed_width = 210.0;
     double bed_depth = 297.0;

@@ -176,8 +176,8 @@ GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs
     values.hatch_angle = prefs.getDoubleLimited(k_pref_hatch_angle, 0.0, -180.0, 180.0);
     values.hatch_inset = prefs.getDoubleLimited(k_pref_hatch_inset, 0.1, 0.0, 100.0);
     values.hatch_angle_increment = prefs.getDoubleLimited(k_pref_hatch_angle_increment, 5.0, -180.0, 180.0);
-    values.pen_up_cmd = prefs.getString(k_pref_pen_up, "G1 Z0 F3000");
-    values.pen_down_cmd = prefs.getString(k_pref_pen_down, "G1 Z5 F3000");
+    values.pen_up_cmd = prefs.getString(k_pref_pen_up, "G90\nG1 Z0 F1200");
+    values.pen_down_cmd = prefs.getString(k_pref_pen_down, "G90\nG1 Z5 F1200");
     values.bed_width = prefs.getDoubleLimited(k_pref_bed_width, 210.0, 1.0, 2000.0);
     values.bed_depth = prefs.getDoubleLimited(k_pref_bed_depth, 297.0, 1.0, 2000.0);
     values.bed_preset = prefs.getString(k_pref_bed_preset, "");

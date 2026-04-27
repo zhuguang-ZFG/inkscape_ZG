@@ -2032,7 +2032,7 @@ void GrblControlPanel::send_pen_state(bool const up)
                 return;
             }
         } else {
-            Glib::ustring const cmd = up ? prefs->getString(k_pref_pen_up, "G1 Z0 F3000") : prefs->getString(k_pref_pen_down, "G1 Z5 F3000");
+            Glib::ustring const cmd = up ? prefs->getString(k_pref_pen_up, "G90\nG1 Z0 F1200") : prefs->getString(k_pref_pen_down, "G90\nG1 Z5 F1200");
             if (cmd.empty()) {
                 e = up ? _("抬笔命令（首选项中设置）为空") : _("落笔命令（首选项中设置）为空");
                 return;
@@ -2826,9 +2826,9 @@ void GrblControlPanel::build_ui()
     _hatch_angle_increment_spin.set_range(-180.0, 180.0);
     _hatch_angle_increment_spin.set_increments(1.0, 10.0);
     _hatch_angle_increment_spin.set_tooltip_text(_("每处理一个闭合轮廓后，下一块排线角度额外增加的角度值。"));
-    _pen_up_cmd_entry.set_placeholder_text(_("例如：G1 Z0 F3000"));
+    _pen_up_cmd_entry.set_placeholder_text(_("例如：G90 / G1 Z0 F1200"));
     _pen_up_cmd_entry.set_tooltip_text(_("抬笔命令。Z 速度也在这里改，例如把 F3000 改成更慢或更快。"));
-    _pen_down_cmd_entry.set_placeholder_text(_("例如：G1 Z5 F3000"));
+    _pen_down_cmd_entry.set_placeholder_text(_("例如：G90 / G1 Z5 F1200"));
     _pen_down_cmd_entry.set_tooltip_text(_("落笔命令。Z 高度和 Z 速度都在这里改。"));
     populate_bed_preset_combo();
     _bed_preset_combo.set_tooltip_text(_("选择绘图范围预设；只有切到“自定义”时，下面的宽度和高度才允许手改。默认 A4。"));
@@ -3386,7 +3386,7 @@ void GrblControlPanel::build_ui()
     _btn_xm.signal_clicked().connect([this] { jog_x(-1.0); });
     _btn_set_origin.signal_clicked().connect([this] {
         run_action([this](std::string &e) {
-            if (!send_link_lines(*_link, {"G21", "G92 X0 Y0 Z0"}, e)) {
+            if (!send_link_lines(*_link, {"G21", "G92 X0 Y0"}, e)) {
                 return;
             }
         });
