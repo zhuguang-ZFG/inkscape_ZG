@@ -249,6 +249,7 @@ private:
     Gtk::Entry _radio_pwd;
     Gtk::CheckButton _chk_radio_restart;
     Gtk::Button _btn_read_radio_mode;
+    Gtk::Button _btn_read_ip;
     Gtk::Button _btn_apply_radio_mode;
     Gtk::Label _status;
     Gtk::Label _jog_lbl;

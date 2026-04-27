@@ -173,6 +173,71 @@ std::string detect_radio_mode_from_reply(std::string reply)
     return {};
 }
 
+std::string extract_ipv4_from_reply(std::string const &reply)
+{
+    auto is_digit = [](char ch) {
+        return std::isdigit(static_cast<unsigned char>(ch)) != 0;
+    };
+    auto is_boundary = [](std::string const &text, std::size_t pos) {
+        if (pos >= text.size()) {
+            return true;
+        }
+        char const ch = text[pos];
+        return !(std::isalnum(static_cast<unsigned char>(ch)) || ch == '.' || ch == '_');
+    };
+
+    for (std::size_t start = 0; start < reply.size(); ++start) {
+        if (!is_digit(reply[start])) {
+            continue;
+        }
+        if (start > 0 && !is_boundary(reply, start - 1)) {
+            continue;
+        }
+
+        std::size_t pos = start;
+        std::string ip;
+        bool ok = true;
+        for (int part = 0; part < 4; ++part) {
+            if (pos >= reply.size() || !is_digit(reply[pos])) {
+                ok = false;
+                break;
+            }
+
+            int value = 0;
+            std::size_t digits = 0;
+            while (pos < reply.size() && is_digit(reply[pos]) && digits < 3) {
+                value = value * 10 + (reply[pos] - '0');
+                ++pos;
+                ++digits;
+            }
+            if (value > 255 || digits == 0) {
+                ok = false;
+                break;
+            }
+            if (pos < reply.size() && is_digit(reply[pos])) {
+                ok = false;
+                break;
+            }
+
+            ip += std::to_string(value);
+            if (part < 3) {
+                if (pos >= reply.size() || reply[pos] != '.') {
+                    ok = false;
+                    break;
+                }
+                ip.push_back('.');
+                ++pos;
+            }
+        }
+
+        if (ok && is_boundary(reply, pos)) {
+            return ip;
+        }
+    }
+
+    return {};
+}
+
 constexpr std::size_t k_max_gcode_stream_lines = 200000;
 
 constexpr std::size_t k_preview_max_strokes = 12000;
@@ -316,6 +381,7 @@ GrblControlPanel::GrblControlPanel()
     , _chk_sync_page_to_bed(_("连接/同步时把页面改成机器行程（可恢复）"))
     , _btn_read_firmware(_("同步绘图机参数"))
     , _btn_read_radio_mode(_("读取模式"))
+    , _btn_read_ip(_("读取 IP"))
     , _btn_apply_radio_mode(_("应用无线模式"))
     , _chk_swap_xy(_("交换 X/Y"))
     , _chk_invert_x(_("反转 X"))
@@ -526,6 +592,7 @@ void GrblControlPanel::refresh_runtime_ui_state()
     _radio_pwd.set_sensitive(allow_interaction);
     _chk_radio_restart.set_sensitive(allow_interaction);
     _btn_read_radio_mode.set_sensitive(allow_interaction);
+    _btn_read_ip.set_sensitive(allow_interaction);
     _btn_apply_radio_mode.set_sensitive(allow_interaction);
     _btn_load_gcode.set_sensitive(allow_interaction);
     _btn_fill_from_drawing.set_sensitive(allow_interaction);
@@ -613,11 +680,17 @@ bool GrblControlPanel::launch_firmware_sync_worker()
     if (!begin_firmware_sync()) {
         return false;
     }
-    if (!start_short_worker([this](GrblPanelWorkers::StopFlag const &stop) {
+    auto const esp_admin_password = _radio_pwd.get_text();
+    if (!start_short_worker([this, esp_admin_password](GrblPanelWorkers::StopFlag const &stop) {
         GrblPanelFirmwareSyncContext context{
             .link = _link.get(),
             .with_locked_open_link = [this](std::atomic<bool> const &stop_flag, std::function<void()> work) {
                 return with_locked_open_link(stop_flag, std::move(work));
+            },
+            .dispatch_to_ui = [this](std::function<void()> work) {
+                Glib::signal_idle().connect_once(sigc::track_object([work = std::move(work)]() mutable {
+                    work();
+                }, *this));
             },
             .finish_sync_ui = [this] {
                 Glib::signal_idle().connect_once(sigc::track_object([this] {
@@ -627,6 +700,7 @@ bool GrblControlPanel::launch_firmware_sync_worker()
             .apply_snapshot_to_ui = [this](GrblFirmwareSnapshot const &snapshot) {
                 return apply_firmware_snapshot_to_ui(snapshot);
             },
+            .esp_admin_password = esp_admin_password,
             .set_firmware_info_text = [this](Glib::ustring const &text) { set_firmware_info_text(text); },
             .save_mapping_preferences = [this](bool refresh_preview) { save_mapping_preferences_from_ui(refresh_preview); },
             .schedule_plot_feedback_refresh = [this](bool refresh_preview) { schedule_plot_feedback_refresh(refresh_preview); },
@@ -776,6 +850,37 @@ GrblFirmwareSyncApplyResult GrblControlPanel::apply_firmware_snapshot_to_ui(Grbl
 
     auto const mapping_update = make_grbl_firmware_mapping_update(snapshot);
     GrblFirmwareSyncApplyResult result;
+    bool refresh_ports_needed = false;
+    if (snapshot.has_esp_ip || snapshot.has_esp_data_port) {
+        auto *prefs = Inkscape::Preferences::get();
+        auto cur_device = prefs->getString(k_pref_device);
+        auto net_host = prefs->getString(k_pref_net_host);
+        int net_port = prefs->getIntLimited(k_pref_net_port, 23, 1, 65535);
+        bool prefs_changed = false;
+
+        if (snapshot.has_esp_ip && net_host != snapshot.esp_ip) {
+            prefs->setString(k_pref_net_host, snapshot.esp_ip);
+            net_host = snapshot.esp_ip;
+            prefs_changed = true;
+        }
+        if (snapshot.has_esp_data_port && net_port != snapshot.esp_data_port) {
+            prefs->setInt(k_pref_net_port, snapshot.esp_data_port);
+            net_port = snapshot.esp_data_port;
+            prefs_changed = true;
+        }
+
+        if (prefs_changed) {
+            if (!net_host.empty() && cur_device.rfind("tcp://", 0) == 0) {
+                auto const tcp_spec = "tcp://" + net_host + ":" + std::to_string(net_port);
+                if (cur_device != tcp_spec) {
+                    prefs->setString(k_pref_device, tcp_spec);
+                }
+            }
+            prefs->save();
+            refresh_ports_needed = true;
+        }
+    }
+
     set_mapping_sync_suspended(true);
     if (mapping_update.has_invert_x) {
         result.changed = update_check_if_needed(_chk_invert_x, mapping_update.invert_x) || result.changed;
@@ -803,6 +908,10 @@ GrblFirmwareSyncApplyResult GrblControlPanel::apply_firmware_snapshot_to_ui(Grbl
                 schedule_plot_feedback_refresh(true);
             }
         }
+    }
+
+    if (refresh_ports_needed) {
+        refresh_port_list();
     }
 
     return result;
@@ -2417,22 +2526,23 @@ void GrblControlPanel::build_ui()
     _radio_mode_combo.set_active_id("STA");
     _radio_mode_combo.set_hexpand(true);
     _radio_mode_combo.set_tooltip_text(
-        _("通过 [ESP110] 设置 Grbl_ESP32 的无线模式。可选：STA / AP / BT / OFF。"));
-    _radio_pwd.set_text("admin");
+        _("通过 ESP 无线命令设置 Grbl_ESP32 的无线模式。可选：STA / AP / BT / OFF。"));
     _radio_pwd.set_visibility(false);
-    _radio_pwd.set_placeholder_text(_("管理员密码"));
+    _radio_pwd.set_placeholder_text(_("管理员密码（通常为 admin）"));
     _radio_pwd.set_hexpand(true);
     _radio_pwd.set_tooltip_text(
-        _("[ESP110] 与可选的 [ESP444] 重启命令使用的管理员密码（默认通常是 admin）。"));
+        _("无线模式命令与可选的 [ESP444] 重启命令使用的管理员密码（默认通常是 admin）。"));
     _chk_radio_restart.set_label(_("切换模式后重启固件（[ESP444]）"));
     _chk_radio_restart.set_active(true);
     _chk_radio_restart.set_halign(Gtk::Align::START);
     _chk_radio_restart.set_tooltip_text(
-        _("启用后，会在 [ESP110] 之后发送 [ESP444]RESTART，使无线模式立即生效。"));
+        _("启用后，会在无线模式命令之后发送 [ESP444]RESTART，使无线模式立即生效。"));
     _btn_read_radio_mode.set_tooltip_text(
-        _("通过 [ESP110]pwd=<password> 查询当前固件无线模式，并同步下拉框。"));
+        _("查询当前固件无线模式，并同步下拉框。"));
+    _btn_read_ip.set_tooltip_text(
+        _("通过 [ESP111] 查询控制器当前 IP 地址，并显示在状态栏。"));
     _btn_apply_radio_mode.set_tooltip_text(
-        _("向固件发送 [ESP110]<MODE>pwd=<password>。切换后可选触发 [ESP444]RESTART。"));
+        _("向固件发送无线模式切换命令。切换后可选触发 [ESP444]RESTART。"));
 
     _port_lbl.set_halign(Gtk::Align::START);
     _port_lbl.set_valign(Gtk::Align::CENTER);
@@ -2867,6 +2977,7 @@ void GrblControlPanel::build_ui()
     Inkscape::UI::pack_start(*radio_row, _radio_mode_combo, true, true, 0);
     Inkscape::UI::pack_start(*radio_row, _radio_pwd, true, true, 0);
     Inkscape::UI::pack_start(*radio_row, _btn_read_radio_mode, false, false, 0);
+    Inkscape::UI::pack_start(*radio_row, _btn_read_ip, false, false, 0);
     Inkscape::UI::pack_start(*radio_row, _btn_apply_radio_mode, false, false, 0);
     Inkscape::UI::pack_start(*box_serial, *radio_row, false, false, 0);
     Inkscape::UI::pack_start(*box_serial, _chk_radio_restart, false, false, 0);
@@ -3009,6 +3120,74 @@ void GrblControlPanel::build_ui()
                 _radio_mode_combo.set_active_id(mode);
             }, *this));
             post_status(Glib::ustring::compose(_("当前固件无线模式：%1"), Glib::ustring(mode)), false);
+        }, false);
+    });
+    _btn_read_ip.signal_clicked().connect([this] {
+        auto const pwd = _radio_pwd.get_text();
+        bool const connected = is_connect_active();
+        run_action([this, pwd, connected](std::string &e) {
+            std::string cmd = "[ESP111]";
+            if (!pwd.empty()) {
+                cmd += "pwd=" + pwd;
+            }
+            cmd += "\n";
+            if (!_link->write_bytes(cmd.data(), cmd.size())) {
+                e = _("无法发送 IP 查询命令。");
+                return;
+            }
+
+            std::string reply;
+            for (int i = 0; i < 8; ++i) {
+                std::string line;
+                if (!_link->read_line(line, 1200)) {
+                    break;
+                }
+                trim_grbl_gcode_line_in_place(line);
+                if (line.empty() || line == "ok") {
+                    continue;
+                }
+                if (line.rfind("error", 0) == 0 || line.rfind("ERROR", 0) == 0) {
+                    e = line;
+                    return;
+                }
+                reply = line;
+                break;
+            }
+
+            if (reply.empty()) {
+                e = _("固件没有返回 IP 信息。");
+                return;
+            }
+
+            auto const ip = extract_ipv4_from_reply(reply);
+            if (ip.empty()) {
+                e = _("已收到 IP 回复，但未能从中解析出有效 IPv4 地址。");
+                return;
+            }
+
+            Glib::signal_idle().connect_once(sigc::track_object([this, ip, connected] {
+                auto *prefs = Inkscape::Preferences::get();
+                int const net_port = prefs->getIntLimited(k_pref_net_port, 23, 1, 65535);
+                Glib::ustring const tcp_spec = "tcp://" + Glib::ustring(ip) + ":" + std::to_string(net_port);
+                prefs->setString(k_pref_net_host, ip);
+                if (!connected) {
+                    prefs->setString(k_pref_device, tcp_spec);
+                }
+                prefs->save();
+                refresh_port_list();
+                if (!connected) {
+                    _port_combo.set_active_id(tcp_spec);
+                }
+                post_status(
+                    connected
+                        ? Glib::ustring::compose(
+                              _("当前控制器 IP：%1。已保存主机地址；断开后可切换为 TCP 连接。"),
+                              Glib::ustring(ip))
+                        : Glib::ustring::compose(
+                              _("当前控制器 IP：%1。已更新为下次 TCP 连接目标，并刷新端口列表。"),
+                              Glib::ustring(ip)),
+                    false);
+            }, *this));
         }, false);
     });
     _btn_apply_radio_mode.signal_clicked().connect([this] {

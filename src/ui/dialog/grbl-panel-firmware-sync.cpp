@@ -4,6 +4,7 @@
 #include "grbl-panel-firmware-sync-state.h"
 
 #include <chrono>
+#include <cctype>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -52,10 +53,169 @@ bool parse_double_c(std::string const &text, double &value_out)
     }
 }
 
+bool starts_with(std::string const &text, std::string const &prefix)
+{
+    return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
+}
+
+std::string trim_copy(std::string text)
+{
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    return text;
+}
+
+bool parse_int_c(std::string const &text, int &value_out)
+{
+    try {
+        size_t idx = 0;
+        auto const parsed = std::stoi(text, &idx);
+        if (idx != text.size()) {
+            return false;
+        }
+        value_out = parsed;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::string find_ipv4_in_text(std::string const &text)
+{
+    auto is_digit = [](char ch) {
+        return std::isdigit(static_cast<unsigned char>(ch)) != 0;
+    };
+    auto is_boundary = [](std::string const &s, std::size_t pos) {
+        if (pos >= s.size()) {
+            return true;
+        }
+        char const ch = s[pos];
+        return !(std::isalnum(static_cast<unsigned char>(ch)) || ch == '.' || ch == '_');
+    };
+
+    for (std::size_t start = 0; start < text.size(); ++start) {
+        if (!is_digit(text[start])) {
+            continue;
+        }
+        if (start > 0 && !is_boundary(text, start - 1)) {
+            continue;
+        }
+
+        std::size_t pos = start;
+        std::string ip;
+        bool ok = true;
+        for (int part = 0; part < 4; ++part) {
+            if (pos >= text.size() || !is_digit(text[pos])) {
+                ok = false;
+                break;
+            }
+            int value = 0;
+            std::size_t digits = 0;
+            while (pos < text.size() && is_digit(text[pos]) && digits < 3) {
+                value = value * 10 + (text[pos] - '0');
+                ++pos;
+                ++digits;
+            }
+            if (digits == 0 || value > 255) {
+                ok = false;
+                break;
+            }
+            if (pos < text.size() && is_digit(text[pos])) {
+                ok = false;
+                break;
+            }
+            ip += std::to_string(value);
+            if (part < 3) {
+                if (pos >= text.size() || text[pos] != '.') {
+                    ok = false;
+                    break;
+                }
+                ip.push_back('.');
+                ++pos;
+            }
+        }
+
+        if (ok && is_boundary(text, pos)) {
+            return ip;
+        }
+    }
+
+    return {};
+}
+
+void parse_esp_snapshot_fields(std::vector<std::string> const &esp_version_lines,
+                               std::vector<std::string> const &esp_status_lines,
+                               GrblFirmwareSnapshot &snapshot)
+{
+    for (auto const &line : esp_status_lines) {
+        if (!snapshot.has_esp_data_port && starts_with(line, "Data port:")) {
+            int value = 0;
+            if (parse_int_c(trim_copy(line.substr(std::string("Data port:").size())), value) && value > 0) {
+                snapshot.esp_data_port = value;
+                snapshot.has_esp_data_port = true;
+            }
+            continue;
+        }
+        if (!snapshot.has_esp_hostname && starts_with(line, "Hostname:")) {
+            auto value = trim_copy(line.substr(std::string("Hostname:").size()));
+            if (!value.empty()) {
+                snapshot.esp_hostname = value;
+                snapshot.has_esp_hostname = true;
+            }
+            continue;
+        }
+        if (!snapshot.has_esp_wifi_mode && starts_with(line, "Current WiFi Mode:")) {
+            auto value = trim_copy(line.substr(std::string("Current WiFi Mode:").size()));
+            if (!value.empty()) {
+                snapshot.esp_wifi_mode = value;
+                snapshot.has_esp_wifi_mode = true;
+            }
+            continue;
+        }
+        if (!snapshot.has_esp_ip && starts_with(line, "IP:")) {
+            auto value = find_ipv4_in_text(line);
+            if (!value.empty()) {
+                snapshot.esp_ip = value;
+                snapshot.has_esp_ip = true;
+            }
+        }
+    }
+
+    for (auto const &line : esp_version_lines) {
+        if (!snapshot.has_esp_hostname) {
+            auto const marker = line.find("# hostname:");
+            if (marker != std::string::npos) {
+                auto value = trim_copy(line.substr(marker + std::string("# hostname:").size()));
+                auto const suffix = value.find('(');
+                if (suffix != std::string::npos) {
+                    value = trim_copy(value.substr(0, suffix));
+                }
+                if (!value.empty()) {
+                    snapshot.esp_hostname = value;
+                    snapshot.has_esp_hostname = true;
+                }
+            }
+        }
+        if (!snapshot.has_esp_ip) {
+            auto value = find_ipv4_in_text(line);
+            if (!value.empty()) {
+                snapshot.esp_ip = value;
+                snapshot.has_esp_ip = true;
+            }
+        }
+    }
+}
+
 Glib::ustring build_firmware_snapshot_text(std::vector<std::string> const &info_lines,
                                            std::vector<std::string> const &modal_lines,
                                            std::vector<std::string> const &offset_lines,
                                            std::vector<std::string> const &setting_lines,
+                                           std::vector<std::string> const &esp_version_lines,
+                                           std::vector<std::string> const &esp_status_lines,
                                            std::vector<std::string> const &errors)
 {
     std::ostringstream out;
@@ -76,6 +236,8 @@ Glib::ustring build_firmware_snapshot_text(std::vector<std::string> const &info_
     append_section("[$G]", modal_lines);
     append_section("[$#]", offset_lines);
     append_section("[$$]", setting_lines);
+    append_section("[ESP800]", esp_version_lines);
+    append_section("[ESP420]", esp_status_lines);
     append_section("[errors]", errors);
 
     return out.str();
@@ -175,6 +337,8 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
     std::vector<std::string> modal_lines;
     std::vector<std::string> offset_lines;
     std::vector<std::string> setting_lines;
+    std::vector<std::string> esp_version_lines;
+    std::vector<std::string> esp_status_lines;
     std::vector<std::string> errors;
     GrblFirmwareSnapshot snapshot;
 
@@ -194,6 +358,11 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         run_query("$G", modal_lines);
         run_query("$#", offset_lines);
         run_query("$$", setting_lines);
+
+        if (!context.esp_admin_password.empty()) {
+            run_query("[ESP800]pwd=" + context.esp_admin_password, esp_version_lines);
+            run_query("[ESP420]pwd=" + context.esp_admin_password, esp_status_lines);
+        }
 
         if (info_lines.empty() && modal_lines.empty() && offset_lines.empty() && setting_lines.empty() &&
             !stop.load(std::memory_order_acquire)) {
@@ -265,17 +434,39 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         }
     }
 
-    snapshot.display_text = build_firmware_snapshot_text(info_lines, modal_lines, offset_lines, setting_lines, errors);
+    parse_esp_snapshot_fields(esp_version_lines, esp_status_lines, snapshot);
+
+    snapshot.display_text = build_firmware_snapshot_text(
+        info_lines, modal_lines, offset_lines, setting_lines, esp_version_lines, esp_status_lines, errors);
 
     if (stop.load(std::memory_order_acquire)) {
         return;
     }
 
-    Glib::signal_idle().connect_once([context, snapshot] {
+    auto apply_snapshot = [context, snapshot] {
         context.set_firmware_info_text(snapshot.display_text);
 
         auto const apply_result = context.apply_snapshot_to_ui(snapshot);
         auto const ui_plan = make_grbl_firmware_sync_ui_plan(snapshot, apply_result);
+        auto status = ui_plan.status;
+        if (snapshot.has_esp_wifi_mode || snapshot.has_esp_hostname || snapshot.has_esp_ip || snapshot.has_esp_data_port) {
+            std::ostringstream esp;
+            esp << "ESP";
+            if (snapshot.has_esp_wifi_mode) {
+                esp << " mode=" << snapshot.esp_wifi_mode;
+            }
+            if (snapshot.has_esp_hostname) {
+                esp << " host=" << snapshot.esp_hostname;
+            }
+            if (snapshot.has_esp_ip) {
+                esp << " ip=" << snapshot.esp_ip;
+            }
+            if (snapshot.has_esp_data_port) {
+                esp << " port=" << snapshot.esp_data_port;
+            }
+            status += "\n";
+            status += esp.str();
+        }
 
         if (ui_plan.save_mapping_preferences) {
             context.save_mapping_preferences(true);
@@ -283,8 +474,13 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         if (ui_plan.schedule_plot_feedback_refresh) {
             context.schedule_plot_feedback_refresh(true);
         }
-        context.post_status(ui_plan.status, false);
-    });
+        context.post_status(status, false);
+    };
+    if (context.dispatch_to_ui) {
+        context.dispatch_to_ui(std::move(apply_snapshot));
+    } else {
+        Glib::signal_idle().connect_once(std::move(apply_snapshot));
+    }
 }
 
 } // namespace Inkscape::UI::Dialog
