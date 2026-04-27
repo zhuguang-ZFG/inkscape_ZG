@@ -207,6 +207,19 @@ Glib::ustring build_grbl_job_summary_markup(Inkscape::Axidraw::GrblPlotStats con
         summary << "\n" << _("路径排序空走：") << travel_optimization;
     }
 
+    if (stats.contour_to_hatch_requested) {
+        summary << "\n" << _("排线轮廓：") << stats.hatch_converted_contours << " / "
+                << stats.hatch_closed_contour_candidates;
+        if (stats.hatch_closed_contour_candidates == 0) {
+            summary << "    " << _("当前图稿没有可转排线的闭合轮廓");
+        } else if (stats.hatch_inset_requested) {
+            summary << "    " << _("内缩成功：") << stats.hatch_inset_applied_contours;
+            if (stats.hatch_inset_fallback_contours > 0) {
+                summary << "    " << _("回退原轮廓：") << stats.hatch_inset_fallback_contours;
+            }
+        }
+    }
+
     return summary.str();
 }
 

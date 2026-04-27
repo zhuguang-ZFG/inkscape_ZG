@@ -5,7 +5,10 @@
 namespace Inkscape::UI::Dialog {
 
 GrblPanelMappingSensitivity make_grbl_panel_mapping_sensitivity(bool const allow_interaction, bool const clip_bed_active,
-                                                                bool const lead_in_out_active,
+                                                                bool const lead_in_active, bool const lead_out_active,
+                                                                bool const contour_to_hatch_active,
+                                                                bool const hatch_inset_active,
+                                                                bool const hatch_angle_increment_active,
                                                                 bool const long_pen_up_active,
                                                                 bool const near_connect_active,
                                                                 bool const sparse_sampling_active,
@@ -20,7 +23,12 @@ GrblPanelMappingSensitivity make_grbl_panel_mapping_sensitivity(bool const allow
     state.flip_y = allow_interaction;
     state.align_origin = allow_interaction;
     state.clip_bed = allow_interaction;
-    state.lead_in_out = allow_interaction;
+    state.lead_in = allow_interaction;
+    state.lead_out = allow_interaction;
+    state.contour_to_hatch = allow_interaction;
+    state.hatch_cross = allow_interaction && contour_to_hatch_active;
+    state.hatch_inset_enable = allow_interaction && contour_to_hatch_active;
+    state.hatch_angle_increment_enable = allow_interaction && contour_to_hatch_active;
     state.long_pen_up = allow_interaction;
     state.near_connect = allow_interaction;
     state.sparse_sampling = allow_interaction;
@@ -29,7 +37,12 @@ GrblPanelMappingSensitivity make_grbl_panel_mapping_sensitivity(bool const allow
     state.travel_feed = allow_interaction;
     state.pen_up_delay = allow_interaction;
     state.pen_down_delay = allow_interaction;
-    state.lead_in_out_dist = allow_interaction && lead_in_out_active;
+    state.lead_in_dist = allow_interaction && lead_in_active;
+    state.lead_out_dist = allow_interaction && lead_out_active;
+    state.hatch_spacing = allow_interaction && contour_to_hatch_active;
+    state.hatch_angle = allow_interaction && contour_to_hatch_active;
+    state.hatch_inset = allow_interaction && contour_to_hatch_active && hatch_inset_active;
+    state.hatch_angle_increment = allow_interaction && contour_to_hatch_active && hatch_angle_increment_active;
     state.pen_up_cmd = allow_interaction;
     state.pen_down_cmd = allow_interaction;
     state.manual_pen_change_to_home = allow_interaction && manual_tool_change_mode;

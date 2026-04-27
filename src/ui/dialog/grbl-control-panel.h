@@ -276,7 +276,12 @@ private:
     Gtk::CheckButton _chk_flip_y;
     Gtk::CheckButton _chk_align_origin;
     Gtk::CheckButton _chk_clip_bed;
-    Gtk::CheckButton _chk_lead_in_out;
+    Gtk::CheckButton _chk_lead_in;
+    Gtk::CheckButton _chk_lead_out;
+    Gtk::CheckButton _chk_contour_to_hatch;
+    Gtk::CheckButton _chk_hatch_cross;
+    Gtk::CheckButton _chk_hatch_inset;
+    Gtk::CheckButton _chk_hatch_angle_increment;
     Gtk::CheckButton _chk_long_pen_up;
     Gtk::CheckButton _chk_near_connect;
     Gtk::CheckButton _chk_sparse_sampling;
@@ -288,7 +293,12 @@ private:
     Gtk::SpinButton _travel_feed_spin;
     Gtk::SpinButton _pen_up_delay_spin;
     Gtk::SpinButton _pen_down_delay_spin;
-    Gtk::SpinButton _lead_in_out_dist_spin;
+    Gtk::SpinButton _lead_in_dist_spin;
+    Gtk::SpinButton _lead_out_dist_spin;
+    Gtk::SpinButton _hatch_spacing_spin;
+    Gtk::SpinButton _hatch_angle_spin;
+    Gtk::SpinButton _hatch_inset_spin;
+    Gtk::SpinButton _hatch_angle_increment_spin;
     Gtk::Entry _pen_up_cmd_entry;
     Gtk::Entry _pen_down_cmd_entry;
     Gtk::SpinButton _bed_width_spin;

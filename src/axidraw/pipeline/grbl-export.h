@@ -59,9 +59,12 @@ struct GrblExportParams {
     /// Optional dwell after pen-up / pen-down commands to let the mechanism settle.
     double pen_up_delay_ms = 0.0;
     double pen_down_delay_ms = 0.0;
-    /// Extend the start/end of open strokes so pen-down / pen-up transitions happen outside the intended geometry.
-    bool enable_path_lead_in_out = false;
-    double lead_in_out_distance_mm = 0.0;
+    /// Extend the start of open strokes so pen-down transitions happen outside the intended geometry.
+    bool enable_path_lead_in = false;
+    double lead_in_distance_mm = 0.0;
+    /// Extend the end of open strokes so pen-up transitions happen outside the intended geometry.
+    bool enable_path_lead_out = false;
+    double lead_out_distance_mm = 0.0;
     /// Optional higher pen-up move used before long travel moves.
     bool enable_long_pen_up = false;
     double long_pen_up_mm = 10.0;
@@ -82,6 +85,16 @@ struct GrblExportParams {
     bool contour_to_hatch = false;
     /// Hatch scanline spacing in machine millimetres (used when @a contour_to_hatch is true).
     double hatch_spacing_mm = 1.0;
+    /// Hatch line angle in degrees (0 = horizontal scanlines in machine coordinates).
+    double hatch_angle_deg = 0.0;
+    /// Before hatch generation, offset each closed contour inward by this amount to keep fill off the border.
+    bool hatch_inset_enable = false;
+    double hatch_inset_mm = 0.1;
+    /// After each closed contour converted to hatch, increment the hatch angle by @a hatch_angle_increment_deg.
+    bool hatch_angle_increment_enable = false;
+    double hatch_angle_increment_deg = 5.0;
+    /// Add a second hatch pass rotated by 90 degrees from @a hatch_angle_deg.
+    bool hatch_cross = false;
 
     /// After converting to millimetres: mirror Y using <tt>page_height_mm − y</tt> (SVG Y-down → common machine Y-up).
     bool flip_y_canvas = false;
@@ -156,6 +169,12 @@ struct GrblPlotStats {
     std::size_t stroke_count = 0;
     std::size_t layer_count = 0;
     std::size_t tool_change_count = 0;
+    bool contour_to_hatch_requested = false;
+    bool hatch_inset_requested = false;
+    std::size_t hatch_closed_contour_candidates = 0;
+    std::size_t hatch_converted_contours = 0;
+    std::size_t hatch_inset_applied_contours = 0;
+    std::size_t hatch_inset_fallback_contours = 0;
     bool has_bounds_mm = false;
     double min_x_mm = 0;
     double min_y_mm = 0;

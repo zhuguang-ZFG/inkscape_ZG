@@ -175,6 +175,15 @@ void print_grbl_export_summary(std::ostream &os, std::string const &destination,
         os << '\n';
     }
 
+    if (stats.contour_to_hatch_requested) {
+        os << "  hatch-contours: " << stats.hatch_converted_contours << " / " << stats.hatch_closed_contour_candidates;
+        if (stats.hatch_inset_requested) {
+            os << ", inset-applied: " << stats.hatch_inset_applied_contours
+               << ", inset-fallback: " << stats.hatch_inset_fallback_contours;
+        }
+        os << '\n';
+    }
+
     if (stats.estimated_duration_sec > 0.0) {
         os << "  estimated-duration-sec: " << std::fixed << std::setprecision(1) << stats.estimated_duration_sec
            << '\n';

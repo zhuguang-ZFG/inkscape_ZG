@@ -15,16 +15,26 @@ struct GrblPanelMappingSensitivity
     bool flip_y = false;
     bool align_origin = false;
     bool clip_bed = false;
-    bool lead_in_out = false;
+    bool lead_in = false;
+    bool lead_out = false;
     bool long_pen_up = false;
     bool near_connect = false;
     bool sparse_sampling = false;
+    bool contour_to_hatch = false;
+    bool hatch_cross = false;
+    bool hatch_inset_enable = false;
+    bool hatch_angle_increment_enable = false;
     bool tool_change_mode = false;
     bool draw_feed = false;
     bool travel_feed = false;
     bool pen_up_delay = false;
     bool pen_down_delay = false;
-    bool lead_in_out_dist = false;
+    bool lead_in_dist = false;
+    bool lead_out_dist = false;
+    bool hatch_spacing = false;
+    bool hatch_angle = false;
+    bool hatch_inset = false;
+    bool hatch_angle_increment = false;
     bool pen_up_cmd = false;
     bool pen_down_cmd = false;
     bool manual_pen_change_to_home = false;
@@ -57,7 +67,11 @@ struct GrblPanelEditorGcodeChangePlan
 };
 
 GrblPanelMappingSensitivity make_grbl_panel_mapping_sensitivity(bool allow_interaction, bool clip_bed_active,
-                                                                bool lead_in_out_active, bool long_pen_up_active,
+                                                                bool lead_in_active, bool lead_out_active,
+                                                                bool contour_to_hatch_active,
+                                                                bool hatch_inset_active,
+                                                                bool hatch_angle_increment_active,
+                                                                bool long_pen_up_active,
                                                                 bool near_connect_active,
                                                                 bool sparse_sampling_active, bool manual_tool_change_mode,
                                                                 bool m6_tool_change_mode, bool tool_change_point_active);
