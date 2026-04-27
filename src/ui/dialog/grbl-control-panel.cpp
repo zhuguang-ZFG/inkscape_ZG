@@ -1259,32 +1259,39 @@ void GrblControlPanel::save_mapping_preferences_from_ui(bool const refresh_previ
 
 void GrblControlPanel::connect_mapping_preference_signals()
 {
-    auto const connect_refreshing = [this](auto &widget, auto signal_getter) {
-        (widget.*signal_getter)().connect([this] { save_mapping_preferences_from_ui(true); });
-    };
-    auto const connect_non_refreshing = [this](auto &widget, auto signal_getter) {
-        (widget.*signal_getter)().connect([this] { save_mapping_preferences_from_ui(false); });
+    auto const connect_mapping = [this](auto &widget, auto signal_getter, GrblPanelMappingRefreshKind const kind) {
+        (widget.*signal_getter)().connect([this, kind] {
+            save_mapping_preferences_from_ui(get_grbl_panel_mapping_refresh_preview(kind));
+        });
     };
 
-    connect_refreshing(_chk_sync_page_to_bed, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_swap_xy, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_invert_x, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_invert_y, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_flip_y, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_align_origin, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_clip_bed, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_lead_in, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_lead_out, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_contour_to_hatch, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_hatch_cross, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_hatch_inset, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_hatch_angle_increment, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_long_pen_up, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_near_connect, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_sparse_sampling, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_manual_pen_change_to_home, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_manual_pen_change_prompt, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_tool_change_point, &Gtk::CheckButton::signal_toggled);
+    connect_mapping(_chk_sync_page_to_bed, &Gtk::CheckButton::signal_toggled,
+                    GrblPanelMappingRefreshKind::geometry_projection);
+    connect_mapping(_chk_swap_xy, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::geometry_projection);
+    connect_mapping(_chk_invert_x, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::geometry_projection);
+    connect_mapping(_chk_invert_y, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::geometry_projection);
+    connect_mapping(_chk_flip_y, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::geometry_projection);
+    connect_mapping(_chk_align_origin, &Gtk::CheckButton::signal_toggled,
+                    GrblPanelMappingRefreshKind::geometry_projection);
+    connect_mapping(_chk_clip_bed, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::geometry_projection);
+    connect_mapping(_chk_lead_in, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_chk_lead_out, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_chk_contour_to_hatch, &Gtk::CheckButton::signal_toggled,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_chk_hatch_cross, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_chk_hatch_inset, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_chk_hatch_angle_increment, &Gtk::CheckButton::signal_toggled,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_chk_long_pen_up, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_chk_near_connect, &Gtk::CheckButton::signal_toggled, GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_chk_sparse_sampling, &Gtk::CheckButton::signal_toggled,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_chk_manual_pen_change_to_home, &Gtk::CheckButton::signal_toggled,
+                    GrblPanelMappingRefreshKind::tool_change_behavior);
+    connect_mapping(_chk_manual_pen_change_prompt, &Gtk::CheckButton::signal_toggled,
+                    GrblPanelMappingRefreshKind::tool_change_behavior);
+    connect_mapping(_chk_tool_change_point, &Gtk::CheckButton::signal_toggled,
+                    GrblPanelMappingRefreshKind::tool_change_behavior);
     _bed_preset_combo.signal_changed().connect([this] {
         if (_suspend_mapping_sync) {
             return;
@@ -1297,20 +1304,30 @@ void GrblControlPanel::connect_mapping_preference_signals()
             update_bed_size_control_sensitivity(!get_runtime_state_view().busy);
         }
         set_mapping_sync_suspended(false);
-        save_mapping_preferences_from_ui(true);
+        save_mapping_preferences_from_ui(get_grbl_panel_mapping_refresh_preview(GrblPanelMappingRefreshKind::bed_size));
     });
-    connect_refreshing(_draw_feed_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_travel_feed_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_pen_up_delay_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_pen_down_delay_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_lead_in_dist_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_lead_out_dist_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_hatch_spacing_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_hatch_angle_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_hatch_inset_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_hatch_angle_increment_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_pen_up_cmd_entry, &Gtk::Entry::signal_changed);
-    connect_refreshing(_pen_down_cmd_entry, &Gtk::Entry::signal_changed);
+    connect_mapping(_draw_feed_spin, &Gtk::SpinButton::signal_value_changed, GrblPanelMappingRefreshKind::motion_timing);
+    connect_mapping(_travel_feed_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::motion_timing);
+    connect_mapping(_pen_up_delay_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::motion_timing);
+    connect_mapping(_pen_down_delay_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::motion_timing);
+    connect_mapping(_lead_in_dist_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_lead_out_dist_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_hatch_spacing_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_hatch_angle_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_hatch_inset_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_hatch_angle_increment_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_pen_up_cmd_entry, &Gtk::Entry::signal_changed, GrblPanelMappingRefreshKind::pen_motion_commands);
+    connect_mapping(_pen_down_cmd_entry, &Gtk::Entry::signal_changed,
+                    GrblPanelMappingRefreshKind::pen_motion_commands);
     _bed_width_spin.signal_value_changed().connect([this] {
         if (_suspend_mapping_sync) {
             return;
@@ -1318,7 +1335,7 @@ void GrblControlPanel::connect_mapping_preference_signals()
         set_mapping_sync_suspended(true);
         sync_bed_preset_from_dimensions();
         set_mapping_sync_suspended(false);
-        save_mapping_preferences_from_ui(true);
+        save_mapping_preferences_from_ui(get_grbl_panel_mapping_refresh_preview(GrblPanelMappingRefreshKind::bed_size));
     });
     _bed_depth_spin.signal_value_changed().connect([this] {
         if (_suspend_mapping_sync) {
@@ -1327,20 +1344,29 @@ void GrblControlPanel::connect_mapping_preference_signals()
         set_mapping_sync_suspended(true);
         sync_bed_preset_from_dimensions();
         set_mapping_sync_suspended(false);
-        save_mapping_preferences_from_ui(true);
+        save_mapping_preferences_from_ui(get_grbl_panel_mapping_refresh_preview(GrblPanelMappingRefreshKind::bed_size));
     });
-    connect_refreshing(_long_pen_up_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_long_move_dist_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_near_connect_dist_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_sparse_keep_every_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_tool_change_x_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_tool_change_y_spin, &Gtk::SpinButton::signal_value_changed);
-    _tool_change_mode_combo.signal_changed().connect([this] { save_mapping_preferences_from_ui(true); });
+    connect_mapping(_long_pen_up_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_long_move_dist_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_near_connect_dist_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_sparse_keep_every_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::path_processing);
+    connect_mapping(_tool_change_x_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::tool_change_behavior);
+    connect_mapping(_tool_change_y_spin, &Gtk::SpinButton::signal_value_changed,
+                    GrblPanelMappingRefreshKind::tool_change_behavior);
+    _tool_change_mode_combo.signal_changed().connect([this] {
+        save_mapping_preferences_from_ui(
+            get_grbl_panel_mapping_refresh_preview(GrblPanelMappingRefreshKind::tool_change_behavior));
+    });
     if (auto const buf = _start_gcode_view.get_buffer()) {
-        connect_non_refreshing(*buf, &Gtk::TextBuffer::signal_changed);
+        connect_mapping(*buf, &Gtk::TextBuffer::signal_changed, GrblPanelMappingRefreshKind::custom_gcode_blocks);
     }
     if (auto const buf = _end_gcode_view.get_buffer()) {
-        connect_non_refreshing(*buf, &Gtk::TextBuffer::signal_changed);
+        connect_mapping(*buf, &Gtk::TextBuffer::signal_changed, GrblPanelMappingRefreshKind::custom_gcode_blocks);
     }
 }
 

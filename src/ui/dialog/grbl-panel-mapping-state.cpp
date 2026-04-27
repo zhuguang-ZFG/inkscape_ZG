@@ -97,4 +97,21 @@ GrblPanelEditorGcodeChangePlan make_grbl_panel_editor_gcode_change_plan(bool con
     return plan;
 }
 
+bool get_grbl_panel_mapping_refresh_preview(GrblPanelMappingRefreshKind const kind)
+{
+    switch (kind) {
+        case GrblPanelMappingRefreshKind::geometry_projection:
+        case GrblPanelMappingRefreshKind::path_processing:
+        case GrblPanelMappingRefreshKind::bed_size:
+            return true;
+        case GrblPanelMappingRefreshKind::motion_timing:
+        case GrblPanelMappingRefreshKind::pen_motion_commands:
+        case GrblPanelMappingRefreshKind::tool_change_behavior:
+        case GrblPanelMappingRefreshKind::custom_gcode_blocks:
+            return false;
+    }
+
+    return true;
+}
+
 } // namespace Inkscape::UI::Dialog

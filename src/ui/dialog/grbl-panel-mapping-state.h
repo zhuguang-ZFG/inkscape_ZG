@@ -7,6 +7,16 @@
 
 namespace Inkscape::UI::Dialog {
 
+enum class GrblPanelMappingRefreshKind {
+    geometry_projection,
+    path_processing,
+    bed_size,
+    motion_timing,
+    pen_motion_commands,
+    tool_change_behavior,
+    custom_gcode_blocks,
+};
+
 struct GrblPanelMappingSensitivity
 {
     bool swap_xy = false;
@@ -81,6 +91,7 @@ GrblPanelMappingChangePlan make_grbl_panel_mapping_change_plan(bool gcode_active
                                                                bool stale_warning_already_posted, bool refresh_preview);
 GrblPanelEditorGcodeChangePlan make_grbl_panel_editor_gcode_change_plan(bool generated_from_document,
                                                                         bool suspend_tracking, bool preview_enabled);
+bool get_grbl_panel_mapping_refresh_preview(GrblPanelMappingRefreshKind kind);
 
 } // namespace Inkscape::UI::Dialog
 
