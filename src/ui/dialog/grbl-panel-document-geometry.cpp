@@ -140,14 +140,9 @@ bool sync_grbl_document_page_to_bed_mm(SPDocument *doc, SPPage *page, double con
     apply_grbl_document_and_page_size_px(doc, page, width.value("px"), height.value("px"),
                                          width.value("px"), height.value("px"));
 
-    if (auto *nv = doc->getNamedView()) {
-        if (auto *repr = nv->getRepr()) {
-            repr->setAttribute("inkscape:document-units", "mm");
-            unit_synced_out = true;
-        }
-    }
     if (auto action = doc->getActionGroup()->lookup_action("set-display-unit")) {
         action->activate(Glib::Variant<Glib::ustring>::create("mm"));
+        unit_synced_out = true;
     }
     return true;
 }
