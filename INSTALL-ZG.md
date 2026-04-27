@@ -1,4 +1,4 @@
-# ZG 安装与恢复指南
+﻿# ZG 安装与恢复指南
 
 本文用于在另一台 Windows 电脑上恢复当前的 Inkscape ZG 主程序与 Grbl_Esp32 固件环境。
 

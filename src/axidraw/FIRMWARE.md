@@ -1,4 +1,4 @@
-# GRBL / 主机逆向参考（已固定记录）
+﻿# GRBL / 主机逆向参考（已固定记录）
 
 Inkscape 树内 `src/axidraw` 与 GRBL 控制面板相关实现，参考源分三类：
 - **设备侧固件行为**：`inkscape-axidraw` 仓库中的 `Grbl_Esp32`
