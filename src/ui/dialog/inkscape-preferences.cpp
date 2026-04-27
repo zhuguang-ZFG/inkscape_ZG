@@ -2643,10 +2643,10 @@ void InkscapePreferences::initPageIO()
     _grbl_pen_down.init("/options/grbl/pen-down-cmd", false);
     _page_grbl.add_line(
         false, _("_Pen up (G-code line):"), _grbl_pen_up, "",
-        _("Single line, typically <tt>G1 Z…</tt> with safe travel, used when “Z axis (G-code lines)” is selected."), true);
+        _("One or more lines, typically absolute-Z commands such as <tt>G90</tt>, <tt>G1 Z0 F1200</tt>, used when “Z axis (G-code lines)” is selected."), true);
     _page_grbl.add_line(
         false, _("P_en down (G-code line):"), _grbl_pen_down, "",
-        _("Single line, typically <tt>G1 Z…</tt> to lower the pen, used when “Z axis (G-code lines)” is selected."), true);
+        _("One or more lines, typically absolute-Z commands such as <tt>G90</tt>, <tt>G1 Z5 F1200</tt>, used when “Z axis (G-code lines)” is selected."), true);
 
     _grbl_limit_layer.init(_("When nothing is selected, only plot the current _layer"), "/options/grbl/limit-to-current-layer", false);
     _page_grbl.add_line(

@@ -433,7 +433,7 @@ GrblControlPanel::GrblControlPanel()
     , _btn_fill_from_drawing(_("从图稿填充(_D)"))
     , _btn_save_gcode(_("G-code 另存为(_A)..."))
     , _btn_send_gcode(_("发送到机器(_S)"))
-    , _btn_cancel_gcode(_("取消发送(_C)"))
+    , _btn_cancel_gcode(_("停止发送(_C)"))
     , _port_lbl(_("串口"))
     , _btn_refresh_ports(_("刷新端口"))
     , _chk_canvas_plot_preview(_("文档空间预览(_V)"))
@@ -2032,12 +2032,23 @@ void GrblControlPanel::send_pen_state(bool const up)
                 return;
             }
         } else {
-            Glib::ustring const cmd = up ? prefs->getString(k_pref_pen_up, "G90\nG1 Z0 F1200") : prefs->getString(k_pref_pen_down, "G90\nG1 Z5 F1200");
+            Glib::ustring const cmd =
+                up ? prefs->getString(k_pref_pen_up, "G90\nG1 Z0 F1200")
+                   : prefs->getString(k_pref_pen_down, "G90\nG1 Z5 F1200");
             if (cmd.empty()) {
                 e = up ? _("抬笔命令（首选项中设置）为空") : _("落笔命令（首选项中设置）为空");
                 return;
             }
-            if (!_link->send_line_wait_ok(cmd.raw(), e)) {
+            bool sent_any = false;
+            for_each_executable_grbl_gcode_line(cmd.raw(), [this, &e, &sent_any](std::string const &line) {
+                sent_any = true;
+                return _link->send_line_wait_ok(line, e);
+            });
+            if (!e.empty()) {
+                return;
+            }
+            if (!sent_any) {
+                e = up ? _("抬笔命令（首选项中设置）为空") : _("落笔命令（首选项中设置）为空");
                 return;
             }
         }
@@ -2196,6 +2207,7 @@ void GrblControlPanel::set_gcode_stream_ui_active(bool const active)
     bool const sending_changed = _gcode_sending.exchange(active, std::memory_order_acq_rel) != active;
     bool const cancel_changed = _gcode_cancel.exchange(false, std::memory_order_acq_rel);
     if (active) {
+        _cancel_return_to_origin_pending = false;
         apply_transport_plan(make_transport_plan_for_gcode_stream(true, _link != nullptr, is_connect_active(),
                                                                   _firmware_syncing.load(std::memory_order_acquire)));
         _delayed_firmware_sync.disconnect();
@@ -2230,6 +2242,10 @@ void GrblControlPanel::complete_gcode_stream_ui(bool const join_worker_thread)
     if (plan.refresh_plot_feedback) {
         schedule_plot_feedback_refresh(false);
     }
+    if (_cancel_return_to_origin_pending) {
+        _cancel_return_to_origin_pending = false;
+        return_to_work_origin_after_cancel();
+    }
 }
 
 void GrblControlPanel::finish_gcode_stream_ui()
@@ -2246,7 +2262,7 @@ void GrblControlPanel::finish_gcode_stream_from_worker()
     }, *this));
 }
 
-bool GrblControlPanel::request_gcode_cancel_ui()
+bool GrblControlPanel::request_gcode_cancel_ui(bool const return_to_origin_after_cancel)
 {
     auto const state = get_runtime_state_view();
     auto const plan = make_grbl_gcode_cancel_plan(state.gcode_active, state.cancel_requested);
@@ -2256,15 +2272,86 @@ bool GrblControlPanel::request_gcode_cancel_ui()
     if (!set_gcode_cancel_requested(true)) {
         return false;
     }
+    _cancel_return_to_origin_pending = return_to_origin_after_cancel;
     if (plan.post_status) {
-        post_status(plan.status, false);
+        if (return_to_origin_after_cancel) {
+            post_status(_("正在请求停止发送；当前行结束后会抬笔并回到工作原点。"), false);
+        } else {
+            post_status(plan.status, false);
+        }
     }
     return true;
 }
 
 void GrblControlPanel::on_cancel_gcode_stream()
 {
-    request_gcode_cancel_ui();
+    bool return_to_origin = false;
+    if (!confirm_cancel_gcode_stream(return_to_origin)) {
+        return;
+    }
+    request_gcode_cancel_ui(return_to_origin);
+}
+
+bool GrblControlPanel::confirm_cancel_gcode_stream(bool &return_to_origin)
+{
+    return_to_origin = false;
+    auto *win = get_dialog_parent_window("无法弹出停止确认窗口。");
+    if (!win) {
+        return false;
+    }
+
+    constexpr int k_resp_stop_only = 1;
+    constexpr int k_resp_stop_and_home = 2;
+
+    Gtk::MessageDialog dlg(*win, _("要停止当前绘图吗？"), false, Gtk::MessageType::QUESTION,
+                           Gtk::ButtonsType::NONE, true);
+    dlg.set_title(_("停止发送"));
+    dlg.set_secondary_text(
+        _("停止会在当前这一行执行完后生效。你可以选择仅停止，或在停止后先抬笔再回到工作原点 X0 Y0。"));
+    dlg.add_button(_("继续发送"), Gtk::ResponseType::CANCEL);
+    dlg.add_button(_("仅停止"), static_cast<Gtk::ResponseType>(k_resp_stop_only));
+    dlg.add_button(_("停止并回原点"), static_cast<Gtk::ResponseType>(k_resp_stop_and_home));
+
+    auto const response = Inkscape::UI::dialog_run(dlg);
+    if (response == static_cast<Gtk::ResponseType>(k_resp_stop_only)) {
+        return true;
+    }
+    if (response == static_cast<Gtk::ResponseType>(k_resp_stop_and_home)) {
+        return_to_origin = true;
+        return true;
+    }
+    return false;
+}
+
+void GrblControlPanel::return_to_work_origin_after_cancel()
+{
+    run_action([this](std::string &e) {
+        auto *prefs = Inkscape::Preferences::get();
+        Glib::ustring const pctl = prefs->getString(k_pref_pen_control, "z");
+        if (pctl == "m3m5" || pctl == "M3M5") {
+            if (!_link->send_line_wait_ok("M5", e)) {
+                return;
+            }
+        } else {
+            Glib::ustring const cmd = prefs->getString(k_pref_pen_up, "G90\nG1 Z0 F1200");
+            bool sent_any = false;
+            for_each_executable_grbl_gcode_line(cmd.raw(), [this, &e, &sent_any](std::string const &line) {
+                sent_any = true;
+                return _link->send_line_wait_ok(line, e);
+            });
+            if (!e.empty()) {
+                return;
+            }
+            if (!sent_any) {
+                e = _("抬笔命令（首选项中设置）为空");
+                return;
+            }
+        }
+        if (!send_link_lines(*_link, {"G21", "G90", "G0 X0 Y0"}, e)) {
+            return;
+        }
+        schedule_plot_feedback_refresh(true);
+    }, false);
 }
 
 void GrblControlPanel::clear_plot_preview_overlay()
@@ -2742,7 +2829,7 @@ void GrblControlPanel::build_ui()
 
     _btn_mech_home.set_tooltip_text(_("回零：执行 $H（必须正确配置限位开关和安全间距）。"));
     _btn_yp.set_tooltip_text(_("Y 正向点动：先用相对模式 G1，再恢复为绝对模式 G90。"));
-    _btn_set_origin.set_tooltip_text(_("G92：将当前位置设为工作零点（X0 Y0 Z0）。"));
+    _btn_set_origin.set_tooltip_text(_("G92：将当前位置设为工作零点（仅 X0 Y0，不改 Z）。"));
     _btn_goto_work_zero.set_tooltip_text(_("G90 G0：以毫米单位（G21）快速移动到工作坐标 X0 Y0。"));
     _btn_goto_work_zero.set_icon_name("go-home-symbolic");
     _btn_xm.set_tooltip_text(_("按设定步长以毫米为单位向 X 负方向点动。"));
@@ -3389,6 +3476,8 @@ void GrblControlPanel::build_ui()
             if (!send_link_lines(*_link, {"G21", "G92 X0 Y0"}, e)) {
                 return;
             }
+            schedule_plot_feedback_refresh(true);
+            post_status(_("已将当前位置设为工作零点（X0 Y0，未改 Z）。"), false);
         });
     });
     _btn_goto_work_zero.signal_clicked().connect([this] {
@@ -3397,6 +3486,8 @@ void GrblControlPanel::build_ui()
                 if (!send_link_lines(*_link, {"G21", "G90", "G0 X0 Y0"}, e)) {
                     return;
                 }
+                schedule_plot_feedback_refresh(true);
+                post_status(_("已移动到工作 XY 零点。"), false);
             });
     });
     _btn_reset.signal_clicked().connect([this] { soft_reset(); });

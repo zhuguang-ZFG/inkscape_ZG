@@ -100,6 +100,9 @@ private:
     void on_load_gcode_from_file();
     void on_save_gcode_as();
     void on_cancel_gcode_stream();
+    bool confirm_cancel_gcode_stream(bool &return_to_origin);
+    bool request_gcode_cancel_ui(bool return_to_origin_after_cancel);
+    void return_to_work_origin_after_cancel();
     void clear_plot_preview_overlay();
     void sync_plot_preview_overlay();
     void set_gcode_stream_ui_active(bool active);
@@ -208,7 +211,6 @@ private:
     void start_gcode_stream_thread(std::function<void()> work);
     void run_gcode_stream_thread(std::function<void(std::unique_lock<std::mutex> &)> work);
     void finish_gcode_stream_worker(std::unique_lock<std::mutex> &port_lock);
-    bool request_gcode_cancel_ui();
     void with_grbl_plot_waits(std::function<void()> work);
     std::unique_ptr<GrblPanelWorkers> _workers;
     std::unique_ptr<Inkscape::Axidraw::GrblLink> _link;
@@ -231,6 +233,7 @@ private:
     bool _suspend_mapping_sync{false};
     bool _plot_feedback_refresh_preview_requested{false};
     bool _plot_feedback_refresh_dispatch_pending{false};
+    bool _cancel_return_to_origin_pending{false};
     bool _suspend_editor_gcode_tracking{false};
     bool _editor_gcode_generation_state_warned_stale{false};
     GrblPageRestoreState _page_restore_state;
