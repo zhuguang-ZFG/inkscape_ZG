@@ -38,6 +38,7 @@
 #include "ui/dialog/grbl-panel-export-session.h"
 #include "ui/dialog/grbl-panel-firmware-sync-state.h"
 #include "ui/dialog/grbl-panel-job-guard.h"
+#include "ui/dialog/grbl-work-origin.h"
 #include "ui/dialog/grbl-panel-mapping-prefs.h"
 #include "ui/dialog/grbl-panel-presentation.h"
 #include "ui/dialog/grbl-panel-sender.h"
@@ -103,6 +104,7 @@ private:
     bool confirm_cancel_gcode_stream(bool &return_to_origin);
     bool request_gcode_cancel_ui(bool return_to_origin_after_cancel);
     void return_to_work_origin_after_cancel();
+    void execute_work_origin_action(GrblWorkOriginAction action);
     void clear_plot_preview_overlay();
     void sync_plot_preview_overlay();
     void set_gcode_stream_ui_active(bool active);
