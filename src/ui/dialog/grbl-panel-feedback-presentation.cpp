@@ -61,13 +61,13 @@ GrblPreviewOverlayUiPlan make_grbl_preview_overlay_ui_plan(bool const any_previe
     }
 
     plan.request_canvas_redraw = true;
+    plan.post_status = !status_note.empty();
+    plan.status = status_note;
     if (!machine_preview_active) {
         return plan;
     }
 
     plan.build_machine_axis = true;
-    plan.post_status = !status_note.empty();
-    plan.status = status_note;
     return plan;
 }
 

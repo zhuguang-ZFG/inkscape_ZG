@@ -37,8 +37,9 @@ TEST(GrblPanelFeedbackPresentationTest, OverlayUiPlanOnlyPostsWhenMachinePreview
 
     auto const doc_only = make_grbl_preview_overlay_ui_plan(true, false, "note");
     EXPECT_FALSE(doc_only.build_machine_axis);
-    EXPECT_FALSE(doc_only.post_status);
+    EXPECT_TRUE(doc_only.post_status);
     EXPECT_TRUE(doc_only.request_canvas_redraw);
+    EXPECT_EQ(doc_only.status.raw(), "note");
 
     auto const machine = make_grbl_preview_overlay_ui_plan(true, true, "note");
     EXPECT_TRUE(machine.build_machine_axis);
