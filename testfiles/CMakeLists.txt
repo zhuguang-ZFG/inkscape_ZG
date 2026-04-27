@@ -289,6 +289,10 @@ add_unit_test(grbl-panel-mapping-prefs-test TEST_SOURCE "grbl-panel-mapping-pref
                                             SOURCES "ui/dialog/grbl-panel-mapping-mode.cpp")
 add_unit_test(grbl-panel-mapping-state-test TEST_SOURCE "grbl-panel-mapping-state-test.cpp"
                                             SOURCES "ui/dialog/grbl-panel-mapping-state.cpp")
+add_unit_test(grbl-pen-command-test TEST_SOURCE "grbl-pen-command-test.cpp"
+                                    SOURCES "ui/dialog/grbl-pen-command.cpp"
+                                            "ui/dialog/grbl-editor-gcode.cpp"
+                                 EXTRA_LIBS GLibmm::GLibmm)
 add_unit_test(grbl-editor-gcode-test TEST_SOURCE "grbl-editor-gcode-test.cpp"
                                      SOURCES "ui/dialog/grbl-editor-gcode.cpp"
                           EXTRA_LIBS GLibmm::GLibmm)
