@@ -71,6 +71,7 @@
 #include "ui/dialog/grbl-panel-feedback-state.h"
 #include "ui/dialog/grbl-panel-mapping-prefs.h"
 #include "ui/dialog/grbl-panel-mapping-state.h"
+#include "ui/dialog/grbl-pen-command.h"
 #include "ui/dialog/grbl-panel-summary-presentation.h"
 #include "ui/dialog/grbl-runtime-state.h"
 #include "ui/dialog/grbl-panel-firmware-sync.h"
@@ -2024,31 +2025,18 @@ void GrblControlPanel::soft_reset()
 void GrblControlPanel::send_pen_state(bool const up)
 {
     run_action([this, up](std::string &e) {
-        (void)this;
         auto *prefs = Inkscape::Preferences::get();
-        Glib::ustring const pctl = prefs->getString(k_pref_pen_control, "z");
-        if (pctl == "m3m5" || pctl == "M3M5") {
-            if (!_link->send_line_wait_ok(up ? "M5" : "M3 S1000", e)) {
-                return;
-            }
-        } else {
-            Glib::ustring const cmd =
-                up ? prefs->getString(k_pref_pen_up, "G90\nG1 Z0 F1200")
-                   : prefs->getString(k_pref_pen_down, "G90\nG1 Z5 F1200");
-            if (cmd.empty()) {
-                e = up ? _("抬笔命令（首选项中设置）为空") : _("落笔命令（首选项中设置）为空");
-                return;
-            }
-            bool sent_any = false;
-            for_each_executable_grbl_gcode_line(cmd.raw(), [this, &e, &sent_any](std::string const &line) {
-                sent_any = true;
-                return _link->send_line_wait_ok(line, e);
-            });
-            if (!e.empty()) {
-                return;
-            }
-            if (!sent_any) {
-                e = up ? _("抬笔命令（首选项中设置）为空") : _("落笔命令（首选项中设置）为空");
+        auto const command = build_grbl_pen_command(
+            prefs->getString(k_pref_pen_control, "z").raw(), up ? GrblPenMotion::up : GrblPenMotion::down,
+            (up ? prefs->getString(k_pref_pen_up, "G90\nG1 Z0 F1200")
+                : prefs->getString(k_pref_pen_down, "G90\nG1 Z5 F1200"))
+                .raw());
+        if (!command.ok) {
+            e = command.error.raw();
+            return;
+        }
+        for (auto const &line : command.lines) {
+            if (!_link->send_line_wait_ok(line, e)) {
                 return;
             }
         }
@@ -2327,23 +2315,15 @@ void GrblControlPanel::return_to_work_origin_after_cancel()
 {
     run_action([this](std::string &e) {
         auto *prefs = Inkscape::Preferences::get();
-        Glib::ustring const pctl = prefs->getString(k_pref_pen_control, "z");
-        if (pctl == "m3m5" || pctl == "M3M5") {
-            if (!_link->send_line_wait_ok("M5", e)) {
-                return;
-            }
-        } else {
-            Glib::ustring const cmd = prefs->getString(k_pref_pen_up, "G90\nG1 Z0 F1200");
-            bool sent_any = false;
-            for_each_executable_grbl_gcode_line(cmd.raw(), [this, &e, &sent_any](std::string const &line) {
-                sent_any = true;
-                return _link->send_line_wait_ok(line, e);
-            });
-            if (!e.empty()) {
-                return;
-            }
-            if (!sent_any) {
-                e = _("抬笔命令（首选项中设置）为空");
+        auto const command = build_grbl_pen_command(prefs->getString(k_pref_pen_control, "z").raw(),
+                                                    GrblPenMotion::up,
+                                                    prefs->getString(k_pref_pen_up, "G90\nG1 Z0 F1200").raw());
+        if (!command.ok) {
+            e = command.error.raw();
+            return;
+        }
+        for (auto const &line : command.lines) {
+            if (!_link->send_line_wait_ok(line, e)) {
                 return;
             }
         }
