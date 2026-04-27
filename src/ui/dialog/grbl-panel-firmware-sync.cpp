@@ -56,6 +56,8 @@ Glib::ustring build_firmware_snapshot_text(std::vector<std::string> const &info_
                                            std::vector<std::string> const &modal_lines,
                                            std::vector<std::string> const &offset_lines,
                                            std::vector<std::string> const &setting_lines,
+                                           std::vector<std::string> const &esp_version_lines,
+                                           std::vector<std::string> const &esp_status_lines,
                                            std::vector<std::string> const &errors)
 {
     std::ostringstream out;
@@ -76,6 +78,8 @@ Glib::ustring build_firmware_snapshot_text(std::vector<std::string> const &info_
     append_section("[$G]", modal_lines);
     append_section("[$#]", offset_lines);
     append_section("[$$]", setting_lines);
+    append_section("[ESP800]", esp_version_lines);
+    append_section("[ESP420]", esp_status_lines);
     append_section("[errors]", errors);
 
     return out.str();
@@ -175,6 +179,8 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
     std::vector<std::string> modal_lines;
     std::vector<std::string> offset_lines;
     std::vector<std::string> setting_lines;
+    std::vector<std::string> esp_version_lines;
+    std::vector<std::string> esp_status_lines;
     std::vector<std::string> errors;
     GrblFirmwareSnapshot snapshot;
 
@@ -194,6 +200,12 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         run_query("$G", modal_lines);
         run_query("$#", offset_lines);
         run_query("$$", setting_lines);
+
+        auto const esp_password = context.get_esp_admin_password ? context.get_esp_admin_password() : std::string{};
+        if (!esp_password.empty()) {
+            run_query("[ESP800]pwd=" + esp_password, esp_version_lines);
+            run_query("[ESP420]pwd=" + esp_password, esp_status_lines);
+        }
 
         if (info_lines.empty() && modal_lines.empty() && offset_lines.empty() && setting_lines.empty() &&
             !stop.load(std::memory_order_acquire)) {
@@ -265,13 +277,14 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
         }
     }
 
-    snapshot.display_text = build_firmware_snapshot_text(info_lines, modal_lines, offset_lines, setting_lines, errors);
+    snapshot.display_text = build_firmware_snapshot_text(
+        info_lines, modal_lines, offset_lines, setting_lines, esp_version_lines, esp_status_lines, errors);
 
     if (stop.load(std::memory_order_acquire)) {
         return;
     }
 
-    Glib::signal_idle().connect_once([context, snapshot] {
+    auto apply_snapshot = [context, snapshot] {
         context.set_firmware_info_text(snapshot.display_text);
 
         auto const apply_result = context.apply_snapshot_to_ui(snapshot);
@@ -284,7 +297,12 @@ void GrblPanelFirmwareSync::run(GrblPanelFirmwareSyncContext const &context, std
             context.schedule_plot_feedback_refresh(true);
         }
         context.post_status(ui_plan.status, false);
-    });
+    };
+    if (context.dispatch_to_ui) {
+        context.dispatch_to_ui(std::move(apply_snapshot));
+    } else {
+        Glib::signal_idle().connect_once(std::move(apply_snapshot));
+    }
 }
 
 } // namespace Inkscape::UI::Dialog

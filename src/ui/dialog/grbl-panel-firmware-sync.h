@@ -37,8 +37,10 @@ struct GrblFirmwareSyncApplyResult {
 struct GrblPanelFirmwareSyncContext {
     Inkscape::Axidraw::GrblLink *link = nullptr;
     std::function<bool(std::atomic<bool> const &, std::function<void()>)> with_locked_open_link;
+    std::function<void(std::function<void()>)> dispatch_to_ui;
     std::function<void()> finish_sync_ui;
     std::function<GrblFirmwareSyncApplyResult(GrblFirmwareSnapshot const &)> apply_snapshot_to_ui;
+    std::function<std::string()> get_esp_admin_password;
     std::function<void(Glib::ustring const &)> set_firmware_info_text;
     std::function<void(bool)> save_mapping_preferences;
     std::function<void(bool)> schedule_plot_feedback_refresh;
