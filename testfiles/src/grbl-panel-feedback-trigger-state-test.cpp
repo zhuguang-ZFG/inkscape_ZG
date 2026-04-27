@@ -17,7 +17,8 @@ TEST(GrblPanelFeedbackTriggerStateTest, SchedulesPreviewRefreshForCanvasAndDocum
              GrblPlotFeedbackTrigger::work_origin_changed,
          }) {
         auto const plan = make_grbl_plot_feedback_trigger_plan(trigger);
-        EXPECT_TRUE(plan.refresh_preview);
+        EXPECT_TRUE(plan.channels.refresh_summaries);
+        EXPECT_TRUE(plan.channels.refresh_overlay);
         EXPECT_FALSE(plan.refresh_immediately);
     }
 }
@@ -25,11 +26,13 @@ TEST(GrblPanelFeedbackTriggerStateTest, SchedulesPreviewRefreshForCanvasAndDocum
 TEST(GrblPanelFeedbackTriggerStateTest, MappingChangesCanRefreshImmediatelyWithoutPreview)
 {
     auto const immediate = make_grbl_plot_feedback_trigger_plan(GrblPlotFeedbackTrigger::mapping_preferences_changed, true);
-    EXPECT_TRUE(immediate.refresh_preview);
+    EXPECT_TRUE(immediate.channels.refresh_summaries);
+    EXPECT_TRUE(immediate.channels.refresh_overlay);
     EXPECT_TRUE(immediate.refresh_immediately);
 
     auto const summaries_only =
         make_grbl_plot_feedback_trigger_plan(GrblPlotFeedbackTrigger::mapping_preferences_changed, false);
-    EXPECT_FALSE(summaries_only.refresh_preview);
+    EXPECT_TRUE(summaries_only.channels.refresh_summaries);
+    EXPECT_FALSE(summaries_only.channels.refresh_overlay);
     EXPECT_TRUE(summaries_only.refresh_immediately);
 }

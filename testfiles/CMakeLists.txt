@@ -318,7 +318,8 @@ add_unit_test(grbl-panel-feedback-state-test TEST_SOURCE "grbl-panel-feedback-st
 add_unit_test(grbl-panel-feedback-scope-state-test TEST_SOURCE "grbl-panel-feedback-scope-state-test.cpp"
                                                    SOURCES "ui/dialog/grbl-panel-feedback-scope-state.cpp")
 add_unit_test(grbl-panel-feedback-trigger-state-test TEST_SOURCE "grbl-panel-feedback-trigger-state-test.cpp"
-                                                     SOURCES "ui/dialog/grbl-panel-feedback-trigger-state.cpp")
+                                                     SOURCES "ui/dialog/grbl-panel-feedback-trigger-state.cpp"
+                                                             "ui/dialog/grbl-panel-feedback-scope-state.cpp")
 add_unit_test(grbl-panel-feedback-presentation-test TEST_SOURCE "grbl-panel-feedback-presentation-test.cpp"
                                                     SOURCES "ui/dialog/grbl-panel-feedback-presentation.cpp"
                                          EXTRA_LIBS GLibmm::GLibmm)
