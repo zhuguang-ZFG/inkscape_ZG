@@ -622,7 +622,7 @@
     <group
        id="open"
        enable_preview="1"
-       path="" />
+       path="C:\Users\Administrator\Desktop" />
     <group
        id="import"
        enable_preview="1"
@@ -672,6 +672,13 @@
     <group
        id="objects"
        expand_to_layer="1" />
+    <group
+       id="now-from-template">
+      <group
+         id="size"
+         x="750"
+         y="500" />
+    </group>
   </group>
   <group
      id="printing">
@@ -1025,14 +1032,29 @@
        long-pen-up-mm="10"
        long-move-dist-mm="20"
        near-connect-distance-mm="0.3"
-       sparse-keep-every="50"
+       sparse-keep-every="64"
        tool-change-x-mm="0"
        tool-change-y-mm="0"
        start-gcode=""
-       end-gcode="">
+       end-gcode="G0 X0 Y0"
+       enable-path-lead-in="0"
+       enable-path-lead-out="0"
+       enable-path-lead-in-out="0"
+       contour-to-hatch="0"
+       hatch-cross="0"
+       hatch-inset-enable="0"
+       hatch-angle-increment-enable="0"
+       path-lead-in-distance-mm="0"
+       path-lead-out-distance-mm="0"
+       hatch-spacing-mm="1"
+       hatch-angle-deg="0"
+       hatch-inset-mm="0.1"
+       hatch-angle-increment-deg="5"
+       path-lead-in-out-distance-mm="0">
       <group
          id="migrations"
-         clip-to-machine-bed-default-v1="1" />
+         clip-to-machine-bed-default-v1="1"
+         end-gcode-default-v1="1" />
     </group>
   </group>
   <group
@@ -1046,7 +1068,7 @@
   <group
      id="desktop">
     <group
-       width="1276"
+       width="1284"
        height="1032"
        x="0"
        y="0"
@@ -1187,4 +1209,10 @@
   <group
      id="pattern-editor"
      currentSet="0" />
+  <group
+     id="dialog">
+    <group
+       id="open"
+       path="C:\Users\Administrator\Desktop" />
+  </group>
 </inkscape>

@@ -181,6 +181,10 @@ private:
     void handle_mapping_preferences_changed(bool refresh_preview);
     void handle_editor_gcode_changed(bool generated_from_document = false);
     void update_page_restore_button();
+    void populate_bed_preset_combo();
+    void apply_bed_preset_to_ui(std::string const &preset_id);
+    void sync_bed_preset_from_dimensions();
+    void update_bed_size_control_sensitivity(bool allow_interaction);
     bool get_configured_bed_size_mm(double &bed_width_mm, double &bed_height_mm) const;
     bool prepare_document_bed_action(SPDocument *&doc, Geom::Rect &bounds, double &bed_w_doc, double &bed_h_doc,
                                      Glib::ustring &error, Glib::ustring const &empty_message) const;
@@ -222,6 +226,7 @@ private:
     sigc::connection _machine_status_poll;
     sigc::connection _delayed_firmware_sync;
     sigc::connection _plot_feedback_refresh_timer;
+    sigc::connection _document_modified;
     bool _suspend_port_combo{false};
     bool _suspend_mapping_sync{false};
     bool _plot_feedback_refresh_preview_requested{false};
@@ -289,6 +294,7 @@ private:
     Gtk::CheckButton _chk_manual_pen_change_to_home;
     Gtk::CheckButton _chk_manual_pen_change_prompt;
     Gtk::CheckButton _chk_tool_change_point;
+    Gtk::ComboBoxText _bed_preset_combo;
     Gtk::SpinButton _draw_feed_spin;
     Gtk::SpinButton _travel_feed_spin;
     Gtk::SpinButton _pen_up_delay_spin;

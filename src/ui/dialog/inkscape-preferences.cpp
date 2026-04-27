@@ -20,6 +20,7 @@
 # include "config.h"  // only include where actually required!
 #endif
 
+#include <cmath>
 #include <fstream>
 #include <glibmm/i18n.h>
 #include <glibmm/markup.h>
@@ -68,6 +69,7 @@
 #include "object/box3d-side.h"
 #include "ui/builder-utils.h"
 #include "ui/dialog-run.h"
+#include "ui/dialog/grbl-panel-mapping-prefs.h"
 #include "ui/modifiers.h"
 #include "ui/pack.h"
 #include "ui/shortcuts.h"
@@ -2758,20 +2760,60 @@ void InkscapePreferences::initPageIO()
         _("Keeps G0/G1 moves inside a rectangle from (0, 0) to the width/depth below. Segments are clipped; disjoint pieces "
           "become separate pen strokes."),
         true, reset_icon());
-    _grbl_bed_width.init("/options/grbl/machine-bed-width-mm", 1.0, 2000.0, 1.0, 10.0, 300.0, false, false);
+    std::vector<Glib::ustring> bed_preset_labels;
+    std::vector<Glib::ustring> bed_preset_values;
+    for (auto const &preset : get_grbl_bed_preset_definitions()) {
+        bed_preset_labels.emplace_back(Glib::ustring::compose("%1: %2 × %3 mm", preset.id, preset.width_mm, preset.depth_mm));
+        bed_preset_values.emplace_back(preset.id);
+    }
+    bed_preset_labels.emplace_back(_("Custom"));
+    bed_preset_values.emplace_back("custom");
+    auto *prefs = Inkscape::Preferences::get();
+    auto bed_preset = prefs->getString("/options/grbl/machine-bed-preset", "");
+    auto bed_width = prefs->getDoubleLimited("/options/grbl/machine-bed-width-mm", 210.0, 1.0, 2000.0);
+    auto bed_depth = prefs->getDoubleLimited("/options/grbl/machine-bed-depth-mm", 297.0, 1.0, 2000.0);
+    if (bed_preset.empty()) {
+        bed_preset = infer_grbl_bed_preset_id(bed_width, bed_depth);
+        if (bed_preset == "custom" && std::abs(bed_width - 300.0) <= 0.05 && std::abs(bed_depth - 200.0) <= 0.05) {
+            bed_preset = "A4";
+            bed_width = 210.0;
+            bed_depth = 297.0;
+        }
+        prefs->setString("/options/grbl/machine-bed-preset", bed_preset);
+        prefs->setDouble("/options/grbl/machine-bed-width-mm", bed_width);
+        prefs->setDouble("/options/grbl/machine-bed-depth-mm", bed_depth);
+    }
+    _grbl_bed_preset.init("/options/grbl/machine-bed-preset", bed_preset_labels, bed_preset_values, "A4");
     _page_grbl.add_line(
-        false, _("Bed _width (mm):"), _grbl_bed_width, "",
-        _("X extent of the safe plotting area used when clipping is enabled (millimetres along machine X)."), false);
-    _grbl_bed_depth.init("/options/grbl/machine-bed-depth-mm", 1.0, 2000.0, 1.0, 10.0, 200.0, false, false);
+        false, _("Plot _range preset:"), _grbl_bed_preset, "",
+        _("Choose a manual plotting range preset. Bed size is no longer read from firmware; default is A4."), false);
+    _grbl_bed_width.init("/options/grbl/machine-bed-width-mm", 1.0, 2000.0, 1.0, 10.0, 210.0, false, false);
     _page_grbl.add_line(
-        false, _("Bed _depth (mm):"), _grbl_bed_depth, "",
-        _("Y extent of the safe plotting area used when clipping is enabled (millimetres along machine Y)."), false);
-    _grbl_bed_width.set_sensitive(_grbl_clip_bed.get_active());
-    _grbl_bed_depth.set_sensitive(_grbl_clip_bed.get_active());
-    _grbl_clip_bed.changed_signal.connect([this](bool) {
-        _grbl_bed_width.set_sensitive(_grbl_clip_bed.get_active());
-        _grbl_bed_depth.set_sensitive(_grbl_clip_bed.get_active());
+        false, _("Custom _width (mm):"), _grbl_bed_width, "",
+        _("X extent of the custom plotting area used for clipping, mirroring, and page fitting."), false);
+    _grbl_bed_depth.init("/options/grbl/machine-bed-depth-mm", 1.0, 2000.0, 1.0, 10.0, 297.0, false, false);
+    _page_grbl.add_line(
+        false, _("Custom _height (mm):"), _grbl_bed_depth, "",
+        _("Y extent of the custom plotting area used for clipping, mirroring, and page fitting."), false);
+    auto const update_grbl_bed_custom_sensitivity = [this]() {
+        bool const custom = _grbl_bed_preset.get_selected() == static_cast<unsigned int>(get_grbl_bed_preset_definitions().size());
+        _grbl_bed_width.set_sensitive(custom);
+        _grbl_bed_depth.set_sensitive(custom);
+    };
+    _grbl_bed_preset.property_selected().signal_changed().connect([this, update_grbl_bed_custom_sensitivity] {
+        auto const row = _grbl_bed_preset.get_selected();
+        auto const presets = get_grbl_bed_preset_definitions();
+        if (row < presets.size()) {
+            auto const &preset = presets[row];
+            auto *prefs = Inkscape::Preferences::get();
+            prefs->setDouble("/options/grbl/machine-bed-width-mm", preset.width_mm);
+            prefs->setDouble("/options/grbl/machine-bed-depth-mm", preset.depth_mm);
+            _grbl_bed_width.set_value(preset.width_mm);
+            _grbl_bed_depth.set_value(preset.depth_mm);
+        }
+        update_grbl_bed_custom_sensitivity();
     });
+    update_grbl_bed_custom_sensitivity();
 
     _page_grbl.add_group_header(_("Layer pauses and pen change"));
     _grbl_auto_pause_layers.init(

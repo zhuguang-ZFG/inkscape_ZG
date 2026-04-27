@@ -103,6 +103,14 @@ namespace {
 
 constexpr auto k_default_end_gcode = "G0 X0 Y0";
 
+Glib::ustring build_bed_preset_label(std::string const &id, double const width_mm, double const depth_mm)
+{
+    if (id == "custom") {
+        return _("自定义");
+    }
+    return Glib::ustring::compose("%1: %2 × %3 mm", id, width_mm, depth_mm);
+}
+
 std::string normalize_editor_end_gcode_block(std::string text)
 {
     if (text.find_first_not_of(" \t\r\n") == std::string::npos) {
@@ -114,7 +122,7 @@ std::string normalize_editor_end_gcode_block(std::string text)
 std::vector<std::string> collect_executable_gcode_lines(std::string const &text)
 {
     std::vector<std::string> lines;
-    for_each_executable_grbl_gcode_line(text, [&](std::string const &line) {
+    Inkscape::UI::Dialog::for_each_executable_grbl_gcode_line(text, [&](std::string const &line) {
         lines.push_back(line);
         return true;
     });
@@ -418,8 +426,8 @@ GrblControlPanel::GrblControlPanel()
     , _btn_pen_down(_("落笔(_D)"))
     , _btn_motors(_("电机休眠(_O)（$SLP）"))
     , _btn_clear_alarm(_("清除报警(_M)（$X）"))
-    , _btn_fit_to_bed(_("缩放到机器行程内"))
-    , _btn_center_to_bed(_("居中到机器行程"))
+    , _btn_fit_to_bed(_("缩放到绘图范围内"))
+    , _btn_center_to_bed(_("居中到绘图范围"))
     , _btn_restore_page_size(_("恢复原页面尺寸"))
     , _btn_load_gcode(_("载入 G-code(_L)..."))
     , _btn_fill_from_drawing(_("从图稿填充(_D)"))
@@ -431,7 +439,7 @@ GrblControlPanel::GrblControlPanel()
     , _chk_canvas_plot_preview(_("文档空间预览(_V)"))
     , _chk_machine_space_preview(_("机器空间预览(_P)（mm -> 画布）"))
     , _chk_send_from_cursor_line(_("仅从光标所在行向下发送(_C)"))
-    , _chk_sync_page_to_bed(_("连接/同步时把页面改成机器行程（可恢复）"))
+    , _chk_sync_page_to_bed(_("同步时把页面改成所选绘图范围（可恢复）"))
     , _btn_read_firmware(_("同步绘图机参数"))
     , _btn_read_radio_mode(_("读取模式"))
     , _btn_read_ip(_("读取 IP"))
@@ -506,6 +514,12 @@ void GrblControlPanel::desktopReplaced()
 
 void GrblControlPanel::documentReplaced()
 {
+    _document_modified.disconnect();
+    if (auto *doc = getDocument()) {
+        _document_modified = doc->connectModified([this](unsigned /*flags*/) {
+            schedule_plot_feedback_refresh(true);
+        });
+    }
     clear_grbl_page_restore_state(_page_restore_state);
     update_page_restore_button();
     schedule_plot_feedback_refresh(true);
@@ -598,8 +612,7 @@ void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_inter
     _chk_manual_pen_change_to_home.set_sensitive(state.manual_pen_change_to_home);
     _chk_manual_pen_change_prompt.set_sensitive(state.manual_pen_change_prompt);
     _chk_tool_change_point.set_sensitive(state.tool_change_point);
-    _bed_width_spin.set_sensitive(state.bed_width);
-    _bed_depth_spin.set_sensitive(state.bed_depth);
+    update_bed_size_control_sensitivity(state.bed_width && state.bed_depth);
     _long_pen_up_spin.set_sensitive(state.long_pen_up_height);
     _long_move_dist_spin.set_sensitive(state.long_move_dist);
     _near_connect_dist_spin.set_sensitive(state.near_connect_dist);
@@ -893,14 +906,6 @@ GrblFirmwareSyncApplyResult GrblControlPanel::apply_firmware_snapshot_to_ui(Grbl
         button.set_active(value);
         return true;
     };
-    auto update_spin_if_needed = [](Gtk::SpinButton &spin, double const value, double const epsilon = 1e-6) {
-        if (std::abs(spin.get_value() - value) <= epsilon) {
-            return false;
-        }
-        spin.set_value(value);
-        return true;
-    };
-
     auto const mapping_update = make_grbl_firmware_mapping_update(snapshot);
     GrblFirmwareSyncApplyResult result;
     bool refresh_ports_needed = false;
@@ -941,24 +946,22 @@ GrblFirmwareSyncApplyResult GrblControlPanel::apply_firmware_snapshot_to_ui(Grbl
     if (mapping_update.has_invert_y) {
         result.changed = update_check_if_needed(_chk_invert_y, mapping_update.invert_y) || result.changed;
     }
-    if (mapping_update.has_bed_width) {
-        result.changed = update_spin_if_needed(_bed_width_spin, mapping_update.bed_width) || result.changed;
-    }
-    if (mapping_update.has_bed_depth) {
-        result.changed = update_spin_if_needed(_bed_depth_spin, mapping_update.bed_depth) || result.changed;
-    }
     set_mapping_sync_suspended(false);
 
-    if (should_sync_page_to_bed_on_firmware_read() && snapshot.has_x_travel && snapshot.has_y_travel) {
+    if (should_sync_page_to_bed_on_firmware_read()) {
         if (auto *doc = getDocument()) {
-            auto const page_sync = apply_grbl_sync_page_to_bed_action(
-                doc, snapshot.x_travel_mm, snapshot.y_travel_mm, _page_restore_state);
-            result.page_synced = page_sync.page_synced;
-            result.unit_synced = page_sync.unit_synced;
-            if (result.page_synced) {
-                request_canvas_redraw();
-                update_page_restore_button();
-                schedule_plot_feedback_refresh(true);
+            double bed_width_mm = 0.0;
+            double bed_depth_mm = 0.0;
+            if (get_configured_bed_size_mm(bed_width_mm, bed_depth_mm)) {
+                auto const page_sync = apply_grbl_sync_page_to_bed_action(
+                    doc, bed_width_mm, bed_depth_mm, _page_restore_state);
+                result.page_synced = page_sync.page_synced;
+                result.unit_synced = page_sync.unit_synced;
+                if (result.page_synced) {
+                    request_canvas_redraw();
+                    update_page_restore_button();
+                    schedule_plot_feedback_refresh(true);
+                }
             }
         }
     }
@@ -1083,6 +1086,45 @@ bool GrblControlPanel::is_export_operation_blocked(Glib::ustring &reason) const
     return false;
 }
 
+void GrblControlPanel::populate_bed_preset_combo()
+{
+    _bed_preset_combo.remove_all();
+    for (auto const &preset : get_grbl_bed_preset_definitions()) {
+        _bed_preset_combo.append(preset.id, build_bed_preset_label(preset.id, preset.width_mm, preset.depth_mm));
+    }
+    _bed_preset_combo.append("custom", _("自定义"));
+}
+
+void GrblControlPanel::apply_bed_preset_to_ui(std::string const &preset_id)
+{
+    auto const id = preset_id.empty() ? std::string("A4") : preset_id;
+    if (id != "custom") {
+        double width_mm = 0.0;
+        double depth_mm = 0.0;
+        if (lookup_grbl_bed_preset_dimensions(id, width_mm, depth_mm)) {
+            _bed_width_spin.set_value(width_mm);
+            _bed_depth_spin.set_value(depth_mm);
+        }
+    }
+    _bed_preset_combo.set_active_id(id);
+    update_bed_size_control_sensitivity(!get_runtime_state_view().busy);
+}
+
+void GrblControlPanel::sync_bed_preset_from_dimensions()
+{
+    auto const inferred = infer_grbl_bed_preset_id(_bed_width_spin.get_value(), _bed_depth_spin.get_value());
+    _bed_preset_combo.set_active_id(inferred);
+    update_bed_size_control_sensitivity(!get_runtime_state_view().busy);
+}
+
+void GrblControlPanel::update_bed_size_control_sensitivity(bool const allow_interaction)
+{
+    bool const custom = _bed_preset_combo.get_active_id() == "custom";
+    _bed_preset_combo.set_sensitive(allow_interaction);
+    _bed_width_spin.set_sensitive(allow_interaction && custom);
+    _bed_depth_spin.set_sensitive(allow_interaction && custom);
+}
+
 void GrblControlPanel::apply_mapping_preferences_to_ui(GrblPanelMappingPrefs const &values)
 {
     _chk_sync_page_to_bed.set_active(values.sync_page_to_bed);
@@ -1118,8 +1160,10 @@ void GrblControlPanel::apply_mapping_preferences_to_ui(GrblPanelMappingPrefs con
     _hatch_angle_increment_spin.set_value(values.hatch_angle_increment);
     _pen_up_cmd_entry.set_text(values.pen_up_cmd);
     _pen_down_cmd_entry.set_text(values.pen_down_cmd);
+    _bed_preset_combo.set_active_id(values.bed_preset);
     _bed_width_spin.set_value(values.bed_width);
     _bed_depth_spin.set_value(values.bed_depth);
+    sync_bed_preset_from_dimensions();
     _long_pen_up_spin.set_value(values.long_pen_up_height);
     _long_move_dist_spin.set_value(values.long_move_dist);
     _near_connect_dist_spin.set_value(values.near_connect_dist);
@@ -1168,6 +1212,7 @@ GrblPanelMappingPrefs GrblControlPanel::read_mapping_preferences_from_ui() const
     values.hatch_angle_increment = _hatch_angle_increment_spin.get_value();
     values.pen_up_cmd = _pen_up_cmd_entry.get_text();
     values.pen_down_cmd = _pen_down_cmd_entry.get_text();
+    values.bed_preset = _bed_preset_combo.get_active_id();
     values.bed_width = _bed_width_spin.get_value();
     values.bed_depth = _bed_depth_spin.get_value();
     values.long_pen_up_height = _long_pen_up_spin.get_value();
@@ -1238,6 +1283,20 @@ void GrblControlPanel::connect_mapping_preference_signals()
     connect_refreshing(_chk_manual_pen_change_to_home, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_manual_pen_change_prompt, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_tool_change_point, &Gtk::CheckButton::signal_toggled);
+    _bed_preset_combo.signal_changed().connect([this] {
+        if (_suspend_mapping_sync) {
+            return;
+        }
+        auto const preset_id = _bed_preset_combo.get_active_id();
+        set_mapping_sync_suspended(true);
+        if (preset_id != "custom") {
+            apply_bed_preset_to_ui(preset_id);
+        } else {
+            update_bed_size_control_sensitivity(!get_runtime_state_view().busy);
+        }
+        set_mapping_sync_suspended(false);
+        save_mapping_preferences_from_ui(true);
+    });
     connect_refreshing(_draw_feed_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_travel_feed_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_pen_up_delay_spin, &Gtk::SpinButton::signal_value_changed);
@@ -1250,8 +1309,24 @@ void GrblControlPanel::connect_mapping_preference_signals()
     connect_refreshing(_hatch_angle_increment_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_pen_up_cmd_entry, &Gtk::Entry::signal_changed);
     connect_refreshing(_pen_down_cmd_entry, &Gtk::Entry::signal_changed);
-    connect_refreshing(_bed_width_spin, &Gtk::SpinButton::signal_value_changed);
-    connect_refreshing(_bed_depth_spin, &Gtk::SpinButton::signal_value_changed);
+    _bed_width_spin.signal_value_changed().connect([this] {
+        if (_suspend_mapping_sync) {
+            return;
+        }
+        set_mapping_sync_suspended(true);
+        sync_bed_preset_from_dimensions();
+        set_mapping_sync_suspended(false);
+        save_mapping_preferences_from_ui(true);
+    });
+    _bed_depth_spin.signal_value_changed().connect([this] {
+        if (_suspend_mapping_sync) {
+            return;
+        }
+        set_mapping_sync_suspended(true);
+        sync_bed_preset_from_dimensions();
+        set_mapping_sync_suspended(false);
+        save_mapping_preferences_from_ui(true);
+    });
     connect_refreshing(_long_pen_up_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_long_move_dist_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_near_connect_dist_spin, &Gtk::SpinButton::signal_value_changed);
@@ -2609,11 +2684,11 @@ void GrblControlPanel::build_ui()
     _btn_refresh_ports.set_valign(Gtk::Align::CENTER);
     _btn_read_firmware.set_icon_name("document-properties-symbolic");
     _btn_read_firmware.set_tooltip_text(
-        _("读取 $I / $G / $# / $$，并自动同步绘图机的方向反转与床面尺寸。"));
+        _("读取 $I / $G / $# / $$，并自动同步绘图机的方向反转；绘图范围尺寸改为由用户手动指定。"));
     _chk_sync_page_to_bed.set_halign(Gtk::Align::START);
     _chk_sync_page_to_bed.set_active(true);
     _chk_sync_page_to_bed.set_tooltip_text(
-        _("启用后，如果固件返回了 $130/$131，就把当前文档页面尺寸同步成机器 X/Y 行程（单位 mm）。"));
+        _("启用后，在连接或同步完成后把当前文档页面尺寸同步成你选定的绘图范围（单位 mm）。"));
     _machine_status.set_halign(Gtk::Align::START);
     _machine_status.set_ellipsize(Pango::EllipsizeMode::END);
     _machine_status.set_max_width_chars(56);
@@ -2689,8 +2764,8 @@ void GrblControlPanel::build_ui()
     _layout_scale_summary.set_tooltip_text(_("这里会持续显示当前图稿相对机器行程的占用比例，以及“一键适配”后会缩放到多少。"));
 
     _chk_swap_xy.set_tooltip_text(_("将导出的机器坐标 X/Y 互换，适合机器坐标系相对画布旋转 90° 的情况。"));
-    _chk_invert_x.set_tooltip_text(_("反转最终输出到机器的 X 坐标方向。"));
-    _chk_invert_y.set_tooltip_text(_("反转最终输出到机器的 Y 坐标方向。"));
+    _chk_invert_x.set_tooltip_text(_("按床面宽度镜像最终输出到机器的 X 坐标方向。"));
+    _chk_invert_y.set_tooltip_text(_("按床面高度镜像最终输出到机器的 Y 坐标方向。"));
     _chk_flip_y.set_tooltip_text(_("按页面高度镜像 Y，用于把 SVG 画布的 Y 向下转换为机器常见的 Y 向上。"));
     _chk_align_origin.set_tooltip_text(_("将导出结果整体平移，使其左下角落在机器 X0 Y0。"));
     _chk_clip_bed.set_tooltip_text(_("将运动裁剪在床面范围内。超出部分会被截断。"));
@@ -2755,14 +2830,16 @@ void GrblControlPanel::build_ui()
     _pen_up_cmd_entry.set_tooltip_text(_("抬笔命令。Z 速度也在这里改，例如把 F3000 改成更慢或更快。"));
     _pen_down_cmd_entry.set_placeholder_text(_("例如：G1 Z5 F3000"));
     _pen_down_cmd_entry.set_tooltip_text(_("落笔命令。Z 高度和 Z 速度都在这里改。"));
+    populate_bed_preset_combo();
+    _bed_preset_combo.set_tooltip_text(_("选择绘图范围预设；只有切到“自定义”时，下面的宽度和高度才允许手改。默认 A4。"));
     _bed_width_spin.set_digits(2);
     _bed_width_spin.set_range(1.0, 2000.0);
     _bed_width_spin.set_increments(1.0, 10.0);
-    _bed_width_spin.set_tooltip_text(_("床面宽度（机器 X 方向，单位 mm）。"));
+    _bed_width_spin.set_tooltip_text(_("自定义绘图范围宽度（机器 X 方向，单位 mm）。"));
     _bed_depth_spin.set_digits(2);
     _bed_depth_spin.set_range(1.0, 2000.0);
     _bed_depth_spin.set_increments(1.0, 10.0);
-    _bed_depth_spin.set_tooltip_text(_("床面深度（机器 Y 方向，单位 mm）。"));
+    _bed_depth_spin.set_tooltip_text(_("自定义绘图范围高度/深度（机器 Y 方向，单位 mm）。"));
     _long_pen_up_spin.set_digits(2);
     _long_pen_up_spin.set_range(-1000.0, 1000.0);
     _long_pen_up_spin.set_increments(0.5, 5.0);
@@ -2994,7 +3071,7 @@ void GrblControlPanel::build_ui()
     frame_layout->set_margin_top(0);
     auto *box_layout = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
     auto *layout_hint = Gtk::make_managed<Gtk::Label>(
-        _("<small>这里可以按机器行程整理图稿，也可以在页面被同步改小后恢复原页面尺寸；画布预览中会标出机器原点、机器 X+、机器 Y+ 方向。</small>"),
+        _("<small>这里可以按你手动指定的绘图范围整理图稿，也可以在页面被同步改小后恢复原页面尺寸；画布预览中会标出机器原点、机器 X+、机器 Y+ 方向。</small>"),
         Gtk::Align::START);
     layout_hint->set_use_markup(true);
     layout_hint->set_wrap(true);
@@ -3057,39 +3134,44 @@ void GrblControlPanel::build_ui()
     mapping_grid->attach(_chk_flip_y, 0, 1, 2, 1);
     mapping_grid->attach(_chk_align_origin, 2, 1, 1, 1);
     mapping_grid->attach(_chk_clip_bed, 0, 2, 1, 1);
-    auto *lbl_bed_w = Gtk::make_managed<Gtk::Label>(_("床面宽(mm)"), Gtk::Align::START);
-    auto *lbl_bed_d = Gtk::make_managed<Gtk::Label>(_("床面深(mm)"), Gtk::Align::START);
-    mapping_grid->attach(*lbl_bed_w, 1, 2, 1, 1);
-    mapping_grid->attach(_bed_width_spin, 2, 2, 1, 1);
-    mapping_grid->attach(*lbl_bed_d, 1, 3, 1, 1);
-    mapping_grid->attach(_bed_depth_spin, 2, 3, 1, 1);
+    auto *lbl_bed_preset = Gtk::make_managed<Gtk::Label>(_("纸张/范围"), Gtk::Align::START);
+    auto *lbl_bed_w = Gtk::make_managed<Gtk::Label>(_("自定义宽(mm)"), Gtk::Align::START);
+    auto *lbl_bed_d = Gtk::make_managed<Gtk::Label>(_("自定义高(mm)"), Gtk::Align::START);
+    mapping_grid->attach(*lbl_bed_preset, 1, 2, 1, 1);
+    mapping_grid->attach(_bed_preset_combo, 2, 2, 1, 1);
+    mapping_grid->attach(*lbl_bed_w, 1, 3, 1, 1);
+    mapping_grid->attach(_bed_width_spin, 2, 3, 1, 1);
+    mapping_grid->attach(*lbl_bed_d, 1, 4, 1, 1);
+    mapping_grid->attach(_bed_depth_spin, 2, 4, 1, 1);
     auto *lbl_draw_feed = Gtk::make_managed<Gtk::Label>(_("绘制速度(mm/min)"), Gtk::Align::START);
     auto *lbl_travel_feed = Gtk::make_managed<Gtk::Label>(_("空走速度(mm/min)"), Gtk::Align::START);
     auto *lbl_pen_up_delay = Gtk::make_managed<Gtk::Label>(_("抬笔后等待(ms)"), Gtk::Align::START);
     auto *lbl_pen_down_delay = Gtk::make_managed<Gtk::Label>(_("落笔后等待(ms)"), Gtk::Align::START);
     auto *lbl_pen_up_cmd = Gtk::make_managed<Gtk::Label>(_("抬笔 G-code"), Gtk::Align::START);
     auto *lbl_pen_down_cmd = Gtk::make_managed<Gtk::Label>(_("落笔 G-code"), Gtk::Align::START);
-    mapping_grid->attach(*lbl_draw_feed, 0, 4, 1, 1);
-    mapping_grid->attach(_draw_feed_spin, 1, 4, 2, 1);
-    mapping_grid->attach(*lbl_travel_feed, 0, 5, 1, 1);
-    mapping_grid->attach(_travel_feed_spin, 1, 5, 2, 1);
-    mapping_grid->attach(*lbl_pen_up_delay, 0, 6, 1, 1);
-    mapping_grid->attach(_pen_up_delay_spin, 1, 6, 2, 1);
-    mapping_grid->attach(*lbl_pen_down_delay, 0, 7, 1, 1);
-    mapping_grid->attach(_pen_down_delay_spin, 1, 7, 2, 1);
-    mapping_grid->attach(*lbl_pen_up_cmd, 0, 8, 1, 1);
-    mapping_grid->attach(_pen_up_cmd_entry, 1, 8, 2, 1);
-    mapping_grid->attach(*lbl_pen_down_cmd, 0, 9, 1, 1);
-    mapping_grid->attach(_pen_down_cmd_entry, 1, 9, 2, 1);
-    mapping_grid->attach(_chk_long_pen_up, 0, 10, 1, 1);
+    mapping_grid->attach(*lbl_draw_feed, 0, 5, 1, 1);
+    mapping_grid->attach(_draw_feed_spin, 1, 5, 2, 1);
+    mapping_grid->attach(*lbl_travel_feed, 0, 6, 1, 1);
+    mapping_grid->attach(_travel_feed_spin, 1, 6, 2, 1);
+    mapping_grid->attach(*lbl_pen_up_delay, 0, 7, 1, 1);
+    mapping_grid->attach(_pen_up_delay_spin, 1, 7, 2, 1);
+    mapping_grid->attach(*lbl_pen_down_delay, 0, 8, 1, 1);
+    mapping_grid->attach(_pen_down_delay_spin, 1, 8, 2, 1);
+    mapping_grid->attach(*lbl_pen_up_cmd, 0, 9, 1, 1);
+    mapping_grid->attach(_pen_up_cmd_entry, 1, 9, 2, 1);
+    mapping_grid->attach(*lbl_pen_down_cmd, 0, 10, 1, 1);
+    mapping_grid->attach(_pen_down_cmd_entry, 1, 10, 2, 1);
+    mapping_grid->attach(_chk_long_pen_up, 0, 11, 1, 1);
     auto *lbl_long_pen = Gtk::make_managed<Gtk::Label>(_("高抬笔位置"), Gtk::Align::START);
     auto *lbl_long_move = Gtk::make_managed<Gtk::Label>(_("触发距离(mm)"), Gtk::Align::START);
-    mapping_grid->attach(*lbl_long_pen, 1, 10, 1, 1);
-    mapping_grid->attach(_long_pen_up_spin, 2, 10, 1, 1);
-    mapping_grid->attach(*lbl_long_move, 1, 11, 1, 1);
-    mapping_grid->attach(_long_move_dist_spin, 2, 11, 1, 1);
+    mapping_grid->attach(*lbl_long_pen, 1, 11, 1, 1);
+    mapping_grid->attach(_long_pen_up_spin, 2, 11, 1, 1);
+    mapping_grid->attach(*lbl_long_move, 1, 12, 1, 1);
+    mapping_grid->attach(_long_move_dist_spin, 2, 12, 1, 1);
     auto *mapping_hint = Gtk::make_managed<Gtk::Label>(
-        _("<small>“同步绘图机参数”会把 $3 同步到反转 X/Y，把 $130/$131 同步到床面尺寸。交换 X/Y 属于主机侧映射，需要你按绘图机结构手动设置。长距离高抬笔参考了 kxnx 绘图机软件中的做法；近距离连笔与起止 G-code 放在下方“绘图任务”区域统一设置。</small>"),
+        _("<small>绘图范围不再从固件自动读取，请在这里直接选 A/B/C/Letter/Legal 或自定义。"
+          "“同步绘图机参数”现在只同步方向类参数；交换 X/Y 仍属于主机侧映射，需要你按绘图机结构手动设置。"
+          "长距离高抬笔参考了 kxnx 绘图机软件中的做法；近距离连笔与起止 G-code 放在下方“绘图任务”区域统一设置。</small>"),
         Gtk::Align::START);
     mapping_hint->set_use_markup(true);
     mapping_hint->set_wrap(true);

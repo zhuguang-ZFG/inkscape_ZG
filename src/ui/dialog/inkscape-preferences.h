@@ -524,6 +524,7 @@ protected:
     UI::Widget::PrefCheckButton   _grbl_flip_y_canvas;
     UI::Widget::PrefCheckButton   _grbl_align_origin;
     UI::Widget::PrefCheckButton   _grbl_clip_bed;
+    UI::Widget::PrefCombo         _grbl_bed_preset;
     UI::Widget::PrefSpinButton    _grbl_bed_width;
     UI::Widget::PrefSpinButton    _grbl_bed_depth;
     UI::Widget::PrefCheckButton   _grbl_auto_pause_layers;

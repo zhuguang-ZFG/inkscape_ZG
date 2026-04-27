@@ -1278,7 +1278,8 @@ static void apply_flip_y_canvas(std::vector<std::vector<Geom::Point>> &strokes, 
     }
 }
 
-static void apply_axis_mapping(std::vector<std::vector<Geom::Point>> &strokes, bool swap_xy, bool invert_x, bool invert_y)
+static void apply_axis_mapping(std::vector<std::vector<Geom::Point>> &strokes, bool swap_xy, bool invert_x, bool invert_y,
+                               double machine_bed_width_mm, double machine_bed_depth_mm)
 {
     if (!swap_xy && !invert_x && !invert_y) {
         return;
@@ -1289,10 +1290,10 @@ static void apply_axis_mapping(std::vector<std::vector<Geom::Point>> &strokes, b
                 std::swap(p[Geom::X], p[Geom::Y]);
             }
             if (invert_x) {
-                p[Geom::X] = -p[Geom::X];
+                p[Geom::X] = machine_bed_width_mm > 1e-6 ? (machine_bed_width_mm - p[Geom::X]) : -p[Geom::X];
             }
             if (invert_y) {
-                p[Geom::Y] = -p[Geom::Y];
+                p[Geom::Y] = machine_bed_depth_mm > 1e-6 ? (machine_bed_depth_mm - p[Geom::Y]) : -p[Geom::Y];
             }
         }
     }
@@ -2374,10 +2375,11 @@ static void apply_flip_y_to_layers(std::vector<std::vector<std::vector<Geom::Poi
 }
 
 static void apply_axis_mapping_to_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers, bool swap_xy,
-                                         bool invert_x, bool invert_y)
+                                         bool invert_x, bool invert_y, double machine_bed_width_mm,
+                                         double machine_bed_depth_mm)
 {
     for (auto &layer : layers) {
-        apply_axis_mapping(layer, swap_xy, invert_x, invert_y);
+        apply_axis_mapping(layer, swap_xy, invert_x, invert_y, machine_bed_width_mm, machine_bed_depth_mm);
     }
 }
 
@@ -2644,8 +2646,10 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
                 prep.preview_flip_y_applied = true;
                 prep.preview_page_h_mm = page_h;
             }
-            apply_axis_mapping_to_layers(prep.layers_mm, params.swap_xy, params.invert_x, params.invert_y);
-            apply_axis_mapping_to_layers(layers_mm_baseline, params.swap_xy, params.invert_x, params.invert_y);
+            apply_axis_mapping_to_layers(prep.layers_mm, params.swap_xy, params.invert_x, params.invert_y,
+                                         params.machine_bed_width_mm, params.machine_bed_depth_mm);
+            apply_axis_mapping_to_layers(layers_mm_baseline, params.swap_xy, params.invert_x, params.invert_y,
+                                         params.machine_bed_width_mm, params.machine_bed_depth_mm);
             prep.preview_swap_xy_applied = params.swap_xy;
             prep.preview_invert_x_applied = params.invert_x;
             prep.preview_invert_y_applied = params.invert_y;
@@ -2793,8 +2797,10 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
         prep.preview_flip_y_applied = true;
         prep.preview_page_h_mm = ph;
     }
-    apply_axis_mapping(prep.flat_mm, params.swap_xy, params.invert_x, params.invert_y);
-    apply_axis_mapping(flat_mm_baseline, params.swap_xy, params.invert_x, params.invert_y);
+    apply_axis_mapping(prep.flat_mm, params.swap_xy, params.invert_x, params.invert_y,
+                       params.machine_bed_width_mm, params.machine_bed_depth_mm);
+    apply_axis_mapping(flat_mm_baseline, params.swap_xy, params.invert_x, params.invert_y,
+                       params.machine_bed_width_mm, params.machine_bed_depth_mm);
     prep.preview_swap_xy_applied = params.swap_xy;
     prep.preview_invert_x_applied = params.invert_x;
     prep.preview_invert_y_applied = params.invert_y;
@@ -3468,8 +3474,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     params.invert_y = prefs->getBool(k_invert_y, false);
     params.align_content_min_to_origin = prefs->getBool(k_align, false);
     params.clip_to_machine_bed = prefs->getBool(k_pref_clip_bed, true);
-    params.machine_bed_width_mm = prefs->getDoubleLimited(k_bw, 300.0, 1.0, 2000.0);
-    params.machine_bed_depth_mm = prefs->getDoubleLimited(k_bd, 200.0, 1.0, 2000.0);
+    params.machine_bed_width_mm = prefs->getDoubleLimited(k_bw, 210.0, 1.0, 2000.0);
+    params.machine_bed_depth_mm = prefs->getDoubleLimited(k_bd, 297.0, 1.0, 2000.0);
     bool const auto_pause_between_layers = prefs->getBool(k_autopause, false);
     bool const manual_pen_change = prefs->getBool(k_manual_pen, false);
     params.pen_change_to_home = prefs->getBool(k_pen_ch_home, true);
