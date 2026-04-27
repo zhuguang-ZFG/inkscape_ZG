@@ -23,7 +23,7 @@ struct GrblPreviewOverlayUiPlan
 Glib::ustring build_grbl_preview_build_error_status(std::string const &err, bool machine_space);
 Glib::ustring build_grbl_preview_status_note(bool machine_space, std::size_t included, std::size_t total,
                                              bool clip_approx);
-GrblPreviewOverlayUiPlan make_grbl_preview_overlay_ui_plan(bool machine_preview_active,
+GrblPreviewOverlayUiPlan make_grbl_preview_overlay_ui_plan(bool any_preview_active, bool machine_preview_active,
                                                            Glib::ustring const &status_note);
 
 } // namespace Inkscape::UI::Dialog

@@ -30,14 +30,19 @@ TEST(GrblPanelFeedbackPresentationTest, PreviewStatusNoteOnlyAppearsWhenClippedO
 
 TEST(GrblPanelFeedbackPresentationTest, OverlayUiPlanOnlyPostsWhenMachinePreviewIsActive)
 {
-    auto const inactive = make_grbl_preview_overlay_ui_plan(false, "note");
+    auto const inactive = make_grbl_preview_overlay_ui_plan(false, false, "note");
     EXPECT_FALSE(inactive.build_machine_axis);
     EXPECT_FALSE(inactive.post_status);
     EXPECT_FALSE(inactive.request_canvas_redraw);
 
-    auto const active = make_grbl_preview_overlay_ui_plan(true, "note");
-    EXPECT_TRUE(active.build_machine_axis);
-    EXPECT_TRUE(active.post_status);
-    EXPECT_TRUE(active.request_canvas_redraw);
-    EXPECT_EQ(active.status.raw(), "note");
+    auto const doc_only = make_grbl_preview_overlay_ui_plan(true, false, "note");
+    EXPECT_FALSE(doc_only.build_machine_axis);
+    EXPECT_FALSE(doc_only.post_status);
+    EXPECT_TRUE(doc_only.request_canvas_redraw);
+
+    auto const machine = make_grbl_preview_overlay_ui_plan(true, true, "note");
+    EXPECT_TRUE(machine.build_machine_axis);
+    EXPECT_TRUE(machine.post_status);
+    EXPECT_TRUE(machine.request_canvas_redraw);
+    EXPECT_EQ(machine.status.raw(), "note");
 }

@@ -2529,7 +2529,8 @@ void GrblControlPanel::sync_plot_preview_overlay()
     if (!build_machine_preview_overlay(doc, desk, session.params, session.context, aff, status_note)) {
         return;
     }
-    auto const ui_plan = make_grbl_preview_overlay_ui_plan(_chk_machine_space_preview.get_active(), status_note);
+    auto const ui_plan = make_grbl_preview_overlay_ui_plan(has_plot_preview_enabled(),
+                                                           _chk_machine_space_preview.get_active(), status_note);
     if (!ui_plan.build_machine_axis) {
         return;
     }

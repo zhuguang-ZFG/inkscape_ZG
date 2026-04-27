@@ -51,16 +51,21 @@ Glib::ustring build_grbl_preview_status_note(bool const machine_space, std::size
     return {};
 }
 
-GrblPreviewOverlayUiPlan make_grbl_preview_overlay_ui_plan(bool const machine_preview_active,
+GrblPreviewOverlayUiPlan make_grbl_preview_overlay_ui_plan(bool const any_preview_active,
+                                                           bool const machine_preview_active,
                                                            Glib::ustring const &status_note)
 {
     GrblPreviewOverlayUiPlan plan;
+    if (!any_preview_active) {
+        return plan;
+    }
+
+    plan.request_canvas_redraw = true;
     if (!machine_preview_active) {
         return plan;
     }
 
     plan.build_machine_axis = true;
-    plan.request_canvas_redraw = true;
     plan.post_status = !status_note.empty();
     plan.status = status_note;
     return plan;
