@@ -327,6 +327,7 @@ GrblControlPanel::GrblControlPanel()
     , _chk_lead_out(_("开放路径收笔延伸"))
     , _chk_contour_to_hatch(_("闭合轮廓转排线填充"))
     , _chk_hatch_cross(_("交叉排线"))
+    , _chk_hatch_inset(_("排线前先内缩轮廓"))
     , _chk_hatch_angle_increment(_("每个轮廓递增排线角度"))
     , _chk_long_pen_up(_("长距离空走时高抬笔"))
     , _chk_near_connect(_("近距离自动连笔"))
@@ -444,8 +445,8 @@ void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_inter
     auto const m6_mode = _tool_change_mode_combo.get_active_id() == k_tool_change_mode_m6;
     auto const state = make_grbl_panel_mapping_sensitivity(
         allow_interaction, _chk_clip_bed.get_active(), _chk_lead_in.get_active(), _chk_lead_out.get_active(),
-        _chk_contour_to_hatch.get_active(), _chk_long_pen_up.get_active(), _chk_near_connect.get_active(),
-        _chk_sparse_sampling.get_active(), manual_mode, m6_mode,
+        _chk_contour_to_hatch.get_active(), _chk_hatch_inset.get_active(), _chk_hatch_angle_increment.get_active(),
+        _chk_long_pen_up.get_active(), _chk_near_connect.get_active(), _chk_sparse_sampling.get_active(), manual_mode, m6_mode,
         _chk_tool_change_point.get_active());
     _chk_swap_xy.set_sensitive(state.swap_xy);
     _chk_invert_x.set_sensitive(state.invert_x);
@@ -457,6 +458,7 @@ void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_inter
     _chk_lead_out.set_sensitive(state.lead_out);
     _chk_contour_to_hatch.set_sensitive(state.contour_to_hatch);
     _chk_hatch_cross.set_sensitive(state.hatch_cross);
+    _chk_hatch_inset.set_sensitive(state.hatch_inset_enable);
     _chk_hatch_angle_increment.set_sensitive(state.hatch_angle_increment_enable);
     _chk_long_pen_up.set_sensitive(state.long_pen_up);
     _chk_near_connect.set_sensitive(state.near_connect);
@@ -470,6 +472,7 @@ void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_inter
     _lead_out_dist_spin.set_sensitive(state.lead_out_dist);
     _hatch_spacing_spin.set_sensitive(state.hatch_spacing);
     _hatch_angle_spin.set_sensitive(state.hatch_angle);
+    _hatch_inset_spin.set_sensitive(state.hatch_inset);
     _hatch_angle_increment_spin.set_sensitive(state.hatch_angle_increment);
     _pen_up_cmd_entry.set_sensitive(state.pen_up_cmd);
     _pen_down_cmd_entry.set_sensitive(state.pen_down_cmd);
@@ -931,6 +934,7 @@ void GrblControlPanel::apply_mapping_preferences_to_ui(GrblPanelMappingPrefs con
     _chk_lead_out.set_active(values.lead_out);
     _chk_contour_to_hatch.set_active(values.contour_to_hatch);
     _chk_hatch_cross.set_active(values.hatch_cross);
+    _chk_hatch_inset.set_active(values.hatch_inset_enable);
     _chk_hatch_angle_increment.set_active(values.hatch_angle_increment_enable);
     _chk_long_pen_up.set_active(values.long_pen_up);
     _chk_near_connect.set_active(values.near_connect);
@@ -948,6 +952,7 @@ void GrblControlPanel::apply_mapping_preferences_to_ui(GrblPanelMappingPrefs con
     _lead_out_dist_spin.set_value(values.lead_out_dist);
     _hatch_spacing_spin.set_value(values.hatch_spacing);
     _hatch_angle_spin.set_value(values.hatch_angle);
+    _hatch_inset_spin.set_value(values.hatch_inset);
     _hatch_angle_increment_spin.set_value(values.hatch_angle_increment);
     _pen_up_cmd_entry.set_text(values.pen_up_cmd);
     _pen_down_cmd_entry.set_text(values.pen_down_cmd);
@@ -981,6 +986,7 @@ GrblPanelMappingPrefs GrblControlPanel::read_mapping_preferences_from_ui() const
     values.lead_out = _chk_lead_out.get_active();
     values.contour_to_hatch = _chk_contour_to_hatch.get_active();
     values.hatch_cross = _chk_hatch_cross.get_active();
+    values.hatch_inset_enable = _chk_hatch_inset.get_active();
     values.hatch_angle_increment_enable = _chk_hatch_angle_increment.get_active();
     values.long_pen_up = _chk_long_pen_up.get_active();
     values.near_connect = _chk_near_connect.get_active();
@@ -996,6 +1002,7 @@ GrblPanelMappingPrefs GrblControlPanel::read_mapping_preferences_from_ui() const
     values.lead_out_dist = _lead_out_dist_spin.get_value();
     values.hatch_spacing = _hatch_spacing_spin.get_value();
     values.hatch_angle = _hatch_angle_spin.get_value();
+    values.hatch_inset = _hatch_inset_spin.get_value();
     values.hatch_angle_increment = _hatch_angle_increment_spin.get_value();
     values.pen_up_cmd = _pen_up_cmd_entry.get_text();
     values.pen_down_cmd = _pen_down_cmd_entry.get_text();
@@ -1061,6 +1068,7 @@ void GrblControlPanel::connect_mapping_preference_signals()
     connect_refreshing(_chk_lead_out, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_contour_to_hatch, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_hatch_cross, &Gtk::CheckButton::signal_toggled);
+    connect_refreshing(_chk_hatch_inset, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_hatch_angle_increment, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_long_pen_up, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_near_connect, &Gtk::CheckButton::signal_toggled);
@@ -1076,6 +1084,7 @@ void GrblControlPanel::connect_mapping_preference_signals()
     connect_refreshing(_lead_out_dist_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_hatch_spacing_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_hatch_angle_spin, &Gtk::SpinButton::signal_value_changed);
+    connect_refreshing(_hatch_inset_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_hatch_angle_increment_spin, &Gtk::SpinButton::signal_value_changed);
     connect_refreshing(_pen_up_cmd_entry, &Gtk::Entry::signal_changed);
     connect_refreshing(_pen_down_cmd_entry, &Gtk::Entry::signal_changed);
@@ -2558,6 +2567,7 @@ void GrblControlPanel::build_ui()
     _lead_out_dist_spin.set_tooltip_text(_("开放路径收笔后延伸的距离。单位 mm；闭合轮廓不会应用。"));
     _chk_contour_to_hatch.set_tooltip_text(_("把闭合轮廓改成排线填充，而不是沿原边界描轮廓。适合刻绘、上色、阴影类任务。"));
     _chk_hatch_cross.set_tooltip_text(_("在当前排线角度基础上，再补一组旋转 90 度的排线。会明显增加绘制线数与时长。"));
+    _chk_hatch_inset.set_tooltip_text(_("参考 GRBL-Plotter 的 inset：先把闭合轮廓向内缩一点，再生成排线，减少排线贴边或越界到边缘的情况。"));
     _chk_hatch_angle_increment.set_tooltip_text(_("每处理完一个闭合轮廓，就把下一块排线的角度再偏移一次。适合相邻区域做错角填充。"));
     _hatch_spacing_spin.set_digits(2);
     _hatch_spacing_spin.set_range(0.05, 100.0);
@@ -2567,6 +2577,10 @@ void GrblControlPanel::build_ui()
     _hatch_angle_spin.set_range(-180.0, 180.0);
     _hatch_angle_spin.set_increments(1.0, 10.0);
     _hatch_angle_spin.set_tooltip_text(_("排线角度。0 度表示按机器坐标系的水平扫描线生成；45 度表示斜向排线。"));
+    _hatch_inset_spin.set_digits(2);
+    _hatch_inset_spin.set_range(0.0, 100.0);
+    _hatch_inset_spin.set_increments(0.05, 0.5);
+    _hatch_inset_spin.set_tooltip_text(_("内缩距离。单位 mm；如果内缩后轮廓退化或无效，会自动回退到原轮廓。"));
     _hatch_angle_increment_spin.set_digits(1);
     _hatch_angle_increment_spin.set_range(-180.0, 180.0);
     _hatch_angle_increment_spin.set_increments(1.0, 10.0);
@@ -2668,20 +2682,24 @@ void GrblControlPanel::build_ui()
     auto *lbl_hatch_angle = Gtk::make_managed<Gtk::Label>(_("排线角度(°)"), Gtk::Align::START);
     job_tuning_grid->attach(*lbl_hatch_angle, 1, 4, 1, 1);
     job_tuning_grid->attach(_hatch_angle_spin, 2, 4, 1, 1);
-    job_tuning_grid->attach(_chk_hatch_angle_increment, 0, 5, 1, 1);
+    job_tuning_grid->attach(_chk_hatch_inset, 0, 5, 1, 1);
+    auto *lbl_hatch_inset = Gtk::make_managed<Gtk::Label>(_("内缩距离(mm)"), Gtk::Align::START);
+    job_tuning_grid->attach(*lbl_hatch_inset, 1, 5, 1, 1);
+    job_tuning_grid->attach(_hatch_inset_spin, 2, 5, 1, 1);
+    job_tuning_grid->attach(_chk_hatch_angle_increment, 0, 6, 1, 1);
     auto *lbl_hatch_angle_increment = Gtk::make_managed<Gtk::Label>(_("递增角度(°)"), Gtk::Align::START);
-    job_tuning_grid->attach(*lbl_hatch_angle_increment, 1, 5, 1, 1);
-    job_tuning_grid->attach(_hatch_angle_increment_spin, 2, 5, 1, 1);
-    job_tuning_grid->attach(_chk_sparse_sampling, 0, 6, 1, 1);
+    job_tuning_grid->attach(*lbl_hatch_angle_increment, 1, 6, 1, 1);
+    job_tuning_grid->attach(_hatch_angle_increment_spin, 2, 6, 1, 1);
+    job_tuning_grid->attach(_chk_sparse_sampling, 0, 7, 1, 1);
     auto *lbl_sparse_sampling = Gtk::make_managed<Gtk::Label>(_("每隔 N 条留 1 条"), Gtk::Align::START);
-    job_tuning_grid->attach(*lbl_sparse_sampling, 1, 6, 1, 1);
-    job_tuning_grid->attach(_sparse_keep_every_spin, 2, 6, 1, 1);
+    job_tuning_grid->attach(*lbl_sparse_sampling, 1, 7, 1, 1);
+    job_tuning_grid->attach(_sparse_keep_every_spin, 2, 7, 1, 1);
     auto *lbl_tool_change_mode = Gtk::make_managed<Gtk::Label>(_("换笔模式"), Gtk::Align::START);
-    job_tuning_grid->attach(*lbl_tool_change_mode, 0, 7, 1, 1);
-    job_tuning_grid->attach(_tool_change_mode_combo, 1, 7, 2, 1);
-    job_tuning_grid->attach(_chk_manual_pen_change_to_home, 0, 8, 2, 1);
-    job_tuning_grid->attach(_chk_manual_pen_change_prompt, 0, 9, 2, 1);
-    job_tuning_grid->attach(_chk_tool_change_point, 0, 10, 1, 1);
+    job_tuning_grid->attach(*lbl_tool_change_mode, 0, 8, 1, 1);
+    job_tuning_grid->attach(_tool_change_mode_combo, 1, 8, 2, 1);
+    job_tuning_grid->attach(_chk_manual_pen_change_to_home, 0, 9, 2, 1);
+    job_tuning_grid->attach(_chk_manual_pen_change_prompt, 0, 10, 2, 1);
+    job_tuning_grid->attach(_chk_tool_change_point, 0, 11, 1, 1);
     auto *tool_change_xy_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
     auto *lbl_tool_change_x = Gtk::make_managed<Gtk::Label>(_("X(mm)"), Gtk::Align::START);
     auto *lbl_tool_change_y = Gtk::make_managed<Gtk::Label>(_("Y(mm)"), Gtk::Align::START);
@@ -2689,7 +2707,7 @@ void GrblControlPanel::build_ui()
     tool_change_xy_box->append(_tool_change_x_spin);
     tool_change_xy_box->append(*lbl_tool_change_y);
     tool_change_xy_box->append(_tool_change_y_spin);
-    job_tuning_grid->attach(*tool_change_xy_box, 1, 10, 2, 1);
+    job_tuning_grid->attach(*tool_change_xy_box, 1, 11, 2, 1);
     auto *job_tuning_hint = Gtk::make_managed<Gtk::Label>(
         _("<small>“近距离自动连笔”会把非常接近的相邻笔画合并成连续路径，减少抬笔和空走，但也会真的画出连接线。适合绘图机轮廓、描边类任务；如果不希望出现桥接线，请关闭。"
           "“排线抽稀”适合规则排线、阴影线、Sparse 图，按当前笔画顺序隔线保留，可显著减少发黑和总时长。"

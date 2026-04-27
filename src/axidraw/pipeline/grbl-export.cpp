@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iterator>
 #include <limits>
@@ -442,10 +443,10 @@ static void reorder_strokes_nearest_neighbor(std::vector<std::vector<Geom::Point
     if (strokes.size() <= 1) {
         return;
     }
+    Geom::Point const origin(0, 0);
     std::vector<std::vector<Geom::Point>> out;
     out.reserve(strokes.size());
     std::vector<bool> used(strokes.size(), false);
-    Geom::Point const origin(0, 0);
     Geom::Point pos = origin;
 
     for (size_t n = 0; n < strokes.size(); ++n) {
@@ -603,6 +604,249 @@ static void reorder_strokes_layers_nearest_neighbor(std::vector<std::vector<std:
     }
 }
 
+static Geom::Point quantize_point_for_grbl(Geom::Point const &p, double quantum_mm = 0.001)
+{
+    if (!(quantum_mm > 0.0)) {
+        return p;
+    }
+
+    auto const snap = [quantum_mm](double value) {
+        return std::round(value / quantum_mm) * quantum_mm;
+    };
+    return {snap(p[Geom::X]), snap(p[Geom::Y])};
+}
+
+static void reorder_strokes_quantized_for_grbl(std::vector<std::vector<Geom::Point>> &strokes, bool allow_reverse,
+                                               double quantum_mm = 0.001)
+{
+    strokes.erase(std::remove_if(strokes.begin(), strokes.end(),
+                                 [](std::vector<Geom::Point> const &s) { return s.size() < 2; }),
+                  strokes.end());
+    if (strokes.size() <= 1) {
+        return;
+    }
+
+    struct StrokeRef {
+        std::vector<Geom::Point> points;
+        Geom::Point front_q;
+        Geom::Point back_q;
+        bool closed = false;
+    };
+
+    std::vector<StrokeRef> refs;
+    refs.reserve(strokes.size());
+    for (auto &stroke : strokes) {
+        auto const front_q = quantize_point_for_grbl(stroke.front(), quantum_mm);
+        auto const back_q = quantize_point_for_grbl(stroke.back(), quantum_mm);
+        bool const closed = stroke_is_closed_for_reorder(stroke);
+        refs.push_back(StrokeRef{std::move(stroke), front_q, back_q, closed});
+    }
+
+    Geom::Point const origin(0, 0);
+    Geom::Point pos = origin;
+    Geom::Point pos_q = quantize_point_for_grbl(origin, quantum_mm);
+    std::vector<std::vector<Geom::Point>> out;
+    out.reserve(refs.size());
+    std::vector<bool> used(refs.size(), false);
+
+    for (std::size_t n = 0; n < refs.size(); ++n) {
+        std::size_t best = 0;
+        double best_d = std::numeric_limits<double>::infinity();
+        bool reverse_best = false;
+
+        for (std::size_t i = 0; i < refs.size(); ++i) {
+            if (used[i] || refs[i].points.size() < 2) {
+                continue;
+            }
+
+            double d_front = Geom::L2(refs[i].front_q - pos_q);
+            if (d_front < best_d) {
+                best_d = d_front;
+                best = i;
+                reverse_best = false;
+            }
+
+            if (allow_reverse && !refs[i].closed) {
+                double const d_back = Geom::L2(refs[i].back_q - pos_q);
+                if (d_back < best_d) {
+                    best_d = d_back;
+                    best = i;
+                    reverse_best = true;
+                }
+            }
+        }
+
+        used[best] = true;
+        auto &chosen = refs[best];
+        if (reverse_best) {
+            std::reverse(chosen.points.begin(), chosen.points.end());
+            std::swap(chosen.front_q, chosen.back_q);
+        }
+        if (chosen.closed) {
+            rotate_closed_stroke_start_near(chosen.points, pos);
+            chosen.front_q = quantize_point_for_grbl(chosen.points.front(), quantum_mm);
+            chosen.back_q = quantize_point_for_grbl(chosen.points.back(), quantum_mm);
+        }
+
+        out.push_back(std::move(chosen.points));
+        pos = out.back().back();
+        pos_q = quantize_point_for_grbl(pos, quantum_mm);
+    }
+
+    strokes = std::move(out);
+}
+
+static void reorder_strokes_layers_quantized_for_grbl(std::vector<std::vector<std::vector<Geom::Point>>> &layers,
+                                                      bool allow_reverse, double quantum_mm = 0.001)
+{
+    for (auto &layer : layers) {
+        if (layer.size() > 1) {
+            reorder_strokes_quantized_for_grbl(layer, allow_reverse, quantum_mm);
+        }
+    }
+}
+
+static bool try_orient_adjacent_strokes_for_exact_join(std::vector<Geom::Point> &a, std::vector<Geom::Point> &b,
+                                                       double endpoint_eps)
+{
+    if (a.size() < 2 || b.size() < 2) {
+        return false;
+    }
+
+    if (Geom::L2(a.back() - b.front()) <= endpoint_eps) {
+        return true;
+    }
+    if (Geom::L2(a.back() - b.back()) <= endpoint_eps) {
+        std::reverse(b.begin(), b.end());
+        return true;
+    }
+    if (Geom::L2(a.front() - b.front()) <= endpoint_eps) {
+        std::reverse(a.begin(), a.end());
+        return true;
+    }
+    if (Geom::L2(a.front() - b.back()) <= endpoint_eps) {
+        std::reverse(a.begin(), a.end());
+        std::reverse(b.begin(), b.end());
+        return true;
+    }
+    return false;
+}
+
+static void merge_exact_touching_strokes(std::vector<std::vector<Geom::Point>> &strokes, double endpoint_eps = 0.01)
+{
+    if (strokes.size() < 2 || endpoint_eps <= 0.0) {
+        return;
+    }
+
+    struct StrokeRef {
+        std::size_t original_index = 0;
+        std::vector<Geom::Point> points;
+    };
+
+    auto append_oriented = [endpoint_eps](std::vector<Geom::Point> &dst, std::vector<Geom::Point> const &src,
+                                          std::size_t start_index = 0) {
+        if (src.size() < 2) {
+            return;
+        }
+
+        auto append_point = [&](Geom::Point const &pt) {
+            if (dst.empty() || Geom::L2(dst.back() - pt) > endpoint_eps) {
+                dst.push_back(pt);
+            }
+        };
+
+        for (std::size_t i = start_index; i < src.size(); ++i) {
+            append_point(src[i]);
+        }
+    };
+
+    std::vector<StrokeRef> open_strokes;
+    std::vector<std::pair<std::size_t, std::vector<Geom::Point>>> preserved;
+    open_strokes.reserve(strokes.size());
+    preserved.reserve(strokes.size());
+    for (std::size_t i = 0; i < strokes.size(); ++i) {
+        auto &stroke = strokes[i];
+        if (stroke.size() < 2) {
+            continue;
+        }
+        if (stroke_is_closed_for_reorder(stroke)) {
+            preserved.emplace_back(i, std::move(stroke));
+            continue;
+        }
+        open_strokes.push_back(StrokeRef{i, std::move(stroke)});
+    }
+
+    if (open_strokes.size() < 2) {
+        std::vector<std::pair<std::size_t, std::vector<Geom::Point>>> rebuilt;
+        rebuilt.reserve(open_strokes.size() + preserved.size());
+        for (auto &stroke : open_strokes) {
+            rebuilt.emplace_back(stroke.original_index, std::move(stroke.points));
+        }
+        rebuilt.insert(rebuilt.end(), std::make_move_iterator(preserved.begin()), std::make_move_iterator(preserved.end()));
+        std::stable_sort(rebuilt.begin(), rebuilt.end(), [](auto const &a, auto const &b) {
+            return a.first < b.first;
+        });
+
+        std::vector<std::vector<Geom::Point>> out;
+        out.reserve(rebuilt.size());
+        for (auto &entry : rebuilt) {
+            if (entry.second.size() >= 2) {
+                out.push_back(std::move(entry.second));
+            }
+        }
+        strokes = std::move(out);
+        return;
+    }
+
+    std::vector<StrokeRef> merged_open_strokes;
+    merged_open_strokes.reserve(open_strokes.size());
+    for (std::size_t i = 0; i < open_strokes.size(); ++i) {
+        auto merged_points = std::move(open_strokes[i].points);
+        auto merged_index = open_strokes[i].original_index;
+
+        while (i + 1 < open_strokes.size()) {
+            auto next_points = std::move(open_strokes[i + 1].points);
+            if (!try_orient_adjacent_strokes_for_exact_join(merged_points, next_points, endpoint_eps)) {
+                open_strokes[i + 1].points = std::move(next_points);
+                break;
+            }
+
+            append_oriented(merged_points, next_points, 1);
+            merged_index = std::min(merged_index, open_strokes[i + 1].original_index);
+            ++i;
+        }
+
+        merged_open_strokes.push_back(StrokeRef{merged_index, std::move(merged_points)});
+    }
+
+    std::vector<std::pair<std::size_t, std::vector<Geom::Point>>> rebuilt;
+    rebuilt.reserve(merged_open_strokes.size() + preserved.size());
+    for (auto &stroke : merged_open_strokes) {
+        rebuilt.emplace_back(stroke.original_index, std::move(stroke.points));
+    }
+    rebuilt.insert(rebuilt.end(), std::make_move_iterator(preserved.begin()), std::make_move_iterator(preserved.end()));
+    std::stable_sort(rebuilt.begin(), rebuilt.end(), [](auto const &a, auto const &b) {
+        return a.first < b.first;
+    });
+
+    std::vector<std::vector<Geom::Point>> out;
+    out.reserve(rebuilt.size());
+    for (auto &entry : rebuilt) {
+        if (entry.second.size() >= 2) {
+            out.push_back(std::move(entry.second));
+        }
+    }
+    strokes = std::move(out);
+}
+
+static void merge_exact_touching_strokes_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers,
+                                                double endpoint_eps = 0.01)
+{
+    for (auto &layer : layers) {
+        merge_exact_touching_strokes(layer, endpoint_eps);
+    }
+}
+
 static bool stroke_is_closed(std::vector<Geom::Point> const &stroke, double eps_mm = 0.05)
 {
     return stroke.size() >= 4 && Geom::L2(stroke.front() - stroke.back()) <= eps_mm;
@@ -615,6 +859,121 @@ static Geom::Point rotate_point_around(Geom::Point const &point, Geom::Point con
     double const dx = point[Geom::X] - origin[Geom::X];
     double const dy = point[Geom::Y] - origin[Geom::Y];
     return {origin[Geom::X] + dx * c - dy * s, origin[Geom::Y] + dx * s + dy * c};
+}
+
+struct HatchConversionStats
+{
+    std::size_t closed_contour_candidates = 0;
+    std::size_t converted_contours = 0;
+    std::size_t inset_applied_contours = 0;
+    std::size_t inset_fallback_contours = 0;
+};
+
+static double signed_polygon_area(std::vector<Geom::Point> const &poly)
+{
+    if (poly.size() < 3) {
+        return 0.0;
+    }
+
+    double twice_area = 0.0;
+    for (std::size_t i = 0; i < poly.size(); ++i) {
+        auto const &a = poly[i];
+        auto const &b = poly[(i + 1) % poly.size()];
+        twice_area += a[Geom::X] * b[Geom::Y] - b[Geom::X] * a[Geom::Y];
+    }
+    return twice_area * 0.5;
+}
+
+static double cross2d(Geom::Point const &a, Geom::Point const &b)
+{
+    return a[Geom::X] * b[Geom::Y] - a[Geom::Y] * b[Geom::X];
+}
+
+static bool line_intersection(Geom::Point const &a0, Geom::Point const &a1, Geom::Point const &b0,
+                              Geom::Point const &b1, Geom::Point &out)
+{
+    auto const da = a1 - a0;
+    auto const db = b1 - b0;
+    double const denom = cross2d(da, db);
+    if (std::abs(denom) <= 1e-9) {
+        return false;
+    }
+
+    double const t = cross2d(b0 - a0, db) / denom;
+    out = a0 + da * t;
+    return std::isfinite(out[Geom::X]) && std::isfinite(out[Geom::Y]);
+}
+
+static bool inset_closed_stroke(std::vector<Geom::Point> const &closed_stroke, double inset_distance,
+                                std::vector<Geom::Point> &inset_stroke)
+{
+    inset_stroke.clear();
+    if (closed_stroke.size() < 4 || inset_distance <= 1e-9) {
+        return false;
+    }
+
+    std::vector<Geom::Point> poly = closed_stroke;
+    if (Geom::L2(poly.front() - poly.back()) <= 1e-9) {
+        poly.pop_back();
+    }
+    if (poly.size() < 3) {
+        return false;
+    }
+
+    double const area = signed_polygon_area(poly);
+    double const abs_area = std::abs(area);
+    if (abs_area <= 1e-9) {
+        return false;
+    }
+
+    double const normal_sign = area >= 0.0 ? 1.0 : -1.0;
+    inset_stroke.reserve(poly.size() + 1);
+
+    for (std::size_t i = 0; i < poly.size(); ++i) {
+        auto const &prev = poly[(i + poly.size() - 1) % poly.size()];
+        auto const &curr = poly[i];
+        auto const &next = poly[(i + 1) % poly.size()];
+
+        auto const edge0 = curr - prev;
+        auto const edge1 = next - curr;
+        double const len0 = Geom::L2(edge0);
+        double const len1 = Geom::L2(edge1);
+        if (len0 <= 1e-9 || len1 <= 1e-9) {
+            return false;
+        }
+
+        Geom::Point const normal0((-edge0[Geom::Y] / len0) * normal_sign, (edge0[Geom::X] / len0) * normal_sign);
+        Geom::Point const normal1((-edge1[Geom::Y] / len1) * normal_sign, (edge1[Geom::X] / len1) * normal_sign);
+        Geom::Point vertex;
+        if (!line_intersection(prev + normal0 * inset_distance, curr + normal0 * inset_distance,
+                               curr + normal1 * inset_distance, next + normal1 * inset_distance, vertex)) {
+            return false;
+        }
+        inset_stroke.push_back(vertex);
+    }
+
+    if (inset_stroke.size() < 3) {
+        inset_stroke.clear();
+        return false;
+    }
+
+    double const inset_area = std::abs(signed_polygon_area(inset_stroke));
+    if (!(inset_area > 1e-9) || inset_area >= abs_area) {
+        inset_stroke.clear();
+        return false;
+    }
+
+    for (std::size_t i = 0; i < inset_stroke.size(); ++i) {
+        auto const &a = inset_stroke[i];
+        auto const &b = inset_stroke[(i + 1) % inset_stroke.size()];
+        if (!std::isfinite(a[Geom::X]) || !std::isfinite(a[Geom::Y]) || Geom::L2(b - a) <= 1e-6) {
+            inset_stroke.clear();
+            return false;
+        }
+    }
+
+    inset_stroke.push_back(inset_stroke.front());
+    return true;
 }
 
 static std::vector<std::vector<Geom::Point>>
@@ -717,8 +1076,9 @@ contour_to_hatch_scanlines(std::vector<Geom::Point> const &closed_stroke, double
 }
 
 static void convert_closed_contours_to_hatch(std::vector<std::vector<Geom::Point>> &strokes_mm, double spacing_mm,
-                                             double angle_deg, bool cross_hatch, bool angle_increment_enable,
-                                             double angle_increment_deg)
+                                             double angle_deg, bool cross_hatch, bool inset_hatch,
+                                             double inset_distance, bool angle_increment_enable,
+                                             double angle_increment_deg, HatchConversionStats *stats = nullptr)
 {
     if (spacing_mm <= 1e-6 || strokes_mm.empty()) {
         return;
@@ -731,9 +1091,22 @@ static void convert_closed_contours_to_hatch(std::vector<std::vector<Geom::Point
             out.push_back(stroke);
             continue;
         }
-        auto hatch = contour_to_hatch_scanlines(stroke, spacing_mm, current_angle_deg);
+        if (stats) {
+            ++stats->closed_contour_candidates;
+        }
+        std::vector<Geom::Point> hatch_source;
+        bool const inset_applied = inset_hatch && inset_closed_stroke(stroke, inset_distance, hatch_source);
+        if (stats && inset_hatch) {
+            if (inset_applied) {
+                ++stats->inset_applied_contours;
+            } else {
+                ++stats->inset_fallback_contours;
+            }
+        }
+        auto const &source = inset_applied ? hatch_source : stroke;
+        auto hatch = contour_to_hatch_scanlines(source, spacing_mm, current_angle_deg);
         if (cross_hatch) {
-            auto cross = contour_to_hatch_scanlines(stroke, spacing_mm, current_angle_deg + 90.0);
+            auto cross = contour_to_hatch_scanlines(source, spacing_mm, current_angle_deg + 90.0);
             hatch.insert(hatch.end(), std::make_move_iterator(cross.begin()), std::make_move_iterator(cross.end()));
         }
         if (angle_increment_enable) {
@@ -743,6 +1116,9 @@ static void convert_closed_contours_to_hatch(std::vector<std::vector<Geom::Point
             out.push_back(stroke);
             continue;
         }
+        if (stats) {
+            ++stats->converted_contours;
+        }
         out.insert(out.end(), std::make_move_iterator(hatch.begin()), std::make_move_iterator(hatch.end()));
     }
     strokes_mm = std::move(out);
@@ -750,7 +1126,9 @@ static void convert_closed_contours_to_hatch(std::vector<std::vector<Geom::Point
 
 static void convert_closed_contours_to_hatch_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers_mm,
                                                     double spacing_mm, double angle_deg, bool cross_hatch,
-                                                    bool angle_increment_enable, double angle_increment_deg)
+                                                    bool inset_hatch, double inset_distance,
+                                                    bool angle_increment_enable, double angle_increment_deg,
+                                                    HatchConversionStats *stats = nullptr)
 {
     if (spacing_mm <= 1e-6 || layers_mm.empty()) {
         return;
@@ -767,9 +1145,22 @@ static void convert_closed_contours_to_hatch_layers(std::vector<std::vector<std:
                 out.push_back(stroke);
                 continue;
             }
-            auto hatch = contour_to_hatch_scanlines(stroke, spacing_mm, current_angle_deg);
+            if (stats) {
+                ++stats->closed_contour_candidates;
+            }
+            std::vector<Geom::Point> hatch_source;
+            bool const inset_applied = inset_hatch && inset_closed_stroke(stroke, inset_distance, hatch_source);
+            if (stats && inset_hatch) {
+                if (inset_applied) {
+                    ++stats->inset_applied_contours;
+                } else {
+                    ++stats->inset_fallback_contours;
+                }
+            }
+            auto const &source = inset_applied ? hatch_source : stroke;
+            auto hatch = contour_to_hatch_scanlines(source, spacing_mm, current_angle_deg);
             if (cross_hatch) {
-                auto cross = contour_to_hatch_scanlines(stroke, spacing_mm, current_angle_deg + 90.0);
+                auto cross = contour_to_hatch_scanlines(source, spacing_mm, current_angle_deg + 90.0);
                 hatch.insert(hatch.end(), std::make_move_iterator(cross.begin()), std::make_move_iterator(cross.end()));
             }
             if (angle_increment_enable) {
@@ -778,6 +1169,9 @@ static void convert_closed_contours_to_hatch_layers(std::vector<std::vector<std:
             if (hatch.empty()) {
                 out.push_back(stroke);
                 continue;
+            }
+            if (stats) {
+                ++stats->converted_contours;
             }
             out.insert(out.end(), std::make_move_iterator(hatch.begin()), std::make_move_iterator(hatch.end()));
         }
@@ -1432,6 +1826,7 @@ struct PreparedPlotMm {
     std::vector<std::vector<std::vector<Geom::Point>>> layers_mm;
     std::vector<int> layer_tool_ids;
     std::vector<Glib::ustring> layer_labels;
+    HatchConversionStats hatch_stats;
 
     /// Set by fill_prepared_plot_mm for inverse “machine mm → document” canvas preview.
     bool preview_flip_y_applied = false;
@@ -1552,6 +1947,12 @@ static void fill_grbl_plot_stats_from_prep(PreparedPlotMm const &prep, GrblExpor
     st.stroke_count = prep.count_strokes();
     st.layer_count = prep.layered ? prep.layers_mm.size() : (prep.flat_mm.empty() ? 0 : 1);
     st.tool_change_count = 0;
+    st.contour_to_hatch_requested = params.contour_to_hatch;
+    st.hatch_inset_requested = params.contour_to_hatch && params.hatch_inset_enable;
+    st.hatch_closed_contour_candidates = prep.hatch_stats.closed_contour_candidates;
+    st.hatch_converted_contours = prep.hatch_stats.converted_contours;
+    st.hatch_inset_applied_contours = prep.hatch_stats.inset_applied_contours;
+    st.hatch_inset_fallback_contours = prep.hatch_stats.inset_fallback_contours;
     st.has_bounds_mm = false;
     double minx = std::numeric_limits<double>::infinity();
     double miny = std::numeric_limits<double>::infinity();
@@ -1682,6 +2083,139 @@ static bool grbl_stage_debug_enabled()
     return enabled;
 }
 
+static char sanitize_debug_token_char(char ch)
+{
+    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+        return ch;
+    }
+    return '_';
+}
+
+static std::string sanitize_debug_token(char const *value)
+{
+    std::string out = value ? value : "";
+    std::transform(out.begin(), out.end(), out.begin(), sanitize_debug_token_char);
+    return out;
+}
+
+static char const *grbl_stage_dump_dir()
+{
+    static char const *dir = []() -> char const * {
+        if (auto const *value = std::getenv("INKSCAPE_GRBL_DEBUG_DUMP_DIR")) {
+            return value[0] != '\0' ? value : nullptr;
+        }
+        return nullptr;
+    }();
+    return dir;
+}
+
+static double stroke_polyline_length(std::vector<Geom::Point> const &stroke)
+{
+    double length = 0.0;
+    for (std::size_t i = 1; i < stroke.size(); ++i) {
+        length += Geom::L2(stroke[i] - stroke[i - 1]);
+    }
+    return length;
+}
+
+static std::string build_grbl_stage_dump_path(char const *scope, char const *variant, char const *stage)
+{
+    auto const *dir = grbl_stage_dump_dir();
+    if (!dir) {
+        return {};
+    }
+
+    std::string path(dir);
+    if (!path.empty()) {
+        char const tail = path.back();
+        if (tail != '\\' && tail != '/') {
+            path.push_back('\\');
+        }
+    }
+
+    path += "grbl-stage-";
+    path += sanitize_debug_token(scope);
+    path.push_back('-');
+    path += sanitize_debug_token(variant);
+    path.push_back('-');
+    path += sanitize_debug_token(stage);
+    path += ".tsv";
+    return path;
+}
+
+static void dump_grbl_stage_strokes(char const *scope, char const *variant, char const *stage,
+                                    std::vector<std::vector<Geom::Point>> const &strokes)
+{
+    auto const path = build_grbl_stage_dump_path(scope, variant, stage);
+    if (path.empty()) {
+        return;
+    }
+
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) {
+        return;
+    }
+
+    out.setf(std::ios::fixed);
+    out << std::setprecision(6);
+    out << "stroke_index\tpoint_count\tclosed\tstart_x_mm\tstart_y_mm\tend_x_mm\tend_y_mm\tdraw_mm\n";
+    for (std::size_t i = 0; i < strokes.size(); ++i) {
+        auto const &stroke = strokes[i];
+        if (stroke.size() < 2) {
+            continue;
+        }
+        out << i
+            << '\t' << stroke.size()
+            << '\t' << (stroke_is_closed_for_reorder(stroke) ? 1 : 0)
+            << '\t' << stroke.front()[Geom::X]
+            << '\t' << stroke.front()[Geom::Y]
+            << '\t' << stroke.back()[Geom::X]
+            << '\t' << stroke.back()[Geom::Y]
+            << '\t' << stroke_polyline_length(stroke)
+            << '\n';
+    }
+}
+
+static void dump_grbl_stage_strokes_layers(char const *scope, char const *variant, char const *stage,
+                                           std::vector<std::vector<std::vector<Geom::Point>>> const &layers,
+                                           std::vector<int> const &tool_ids)
+{
+    auto const path = build_grbl_stage_dump_path(scope, variant, stage);
+    if (path.empty()) {
+        return;
+    }
+
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) {
+        return;
+    }
+
+    out.setf(std::ios::fixed);
+    out << std::setprecision(6);
+    out << "layer_index\ttool_id\tstroke_index\tpoint_count\tclosed\tstart_x_mm\tstart_y_mm\tend_x_mm\tend_y_mm\tdraw_mm\n";
+    for (std::size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
+        auto const &layer = layers[layer_index];
+        int const tool_id = layer_index < tool_ids.size() ? tool_ids[layer_index] : -1;
+        for (std::size_t stroke_index = 0; stroke_index < layer.size(); ++stroke_index) {
+            auto const &stroke = layer[stroke_index];
+            if (stroke.size() < 2) {
+                continue;
+            }
+            out << layer_index
+                << '\t' << tool_id
+                << '\t' << stroke_index
+                << '\t' << stroke.size()
+                << '\t' << (stroke_is_closed_for_reorder(stroke) ? 1 : 0)
+                << '\t' << stroke.front()[Geom::X]
+                << '\t' << stroke.front()[Geom::Y]
+                << '\t' << stroke.back()[Geom::X]
+                << '\t' << stroke.back()[Geom::Y]
+                << '\t' << stroke_polyline_length(stroke)
+                << '\n';
+        }
+    }
+}
+
 static void log_grbl_stage_stats(char const *scope, char const *variant, char const *stage,
                                  std::vector<std::vector<Geom::Point>> const &strokes, GrblExportParams const &params)
 {
@@ -1712,6 +2246,7 @@ static void log_grbl_stage_stats(char const *scope, char const *variant, char co
             << "]-[" << st.max_x_mm << "," << st.max_y_mm << "]";
     }
     std::cerr << oss.str() << std::endl;
+    dump_grbl_stage_strokes(scope, variant, stage, strokes);
 }
 
 static void log_grbl_stage_stats_layers(char const *scope, char const *variant, char const *stage,
@@ -1747,6 +2282,7 @@ static void log_grbl_stage_stats_layers(char const *scope, char const *variant, 
             << "]-[" << st.max_x_mm << "," << st.max_y_mm << "]";
     }
     std::cerr << oss.str() << std::endl;
+    dump_grbl_stage_strokes_layers(scope, variant, stage, layers, tool_ids);
 }
 
 static void collect_layers_doc_strokes(SPDesktop *desktop, SPDocument *doc, double const flatness,
@@ -1898,6 +2434,54 @@ static void prune_empty_layers(std::vector<std::vector<std::vector<Geom::Point>>
     }
 }
 
+static void coalesce_consecutive_same_tool_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers,
+                                                  std::vector<int> *layer_tool_ids = nullptr,
+                                                  std::vector<Glib::ustring> *layer_labels = nullptr)
+{
+    if (layers.size() <= 1 || !layer_tool_ids || layer_tool_ids->size() != layers.size()) {
+        return;
+    }
+
+    std::vector<std::vector<std::vector<Geom::Point>>> merged_layers;
+    std::vector<int> merged_tools;
+    std::vector<Glib::ustring> merged_labels;
+    merged_layers.reserve(layers.size());
+    merged_tools.reserve(layer_tool_ids->size());
+    if (layer_labels) {
+        merged_labels.reserve(layer_labels->size());
+    }
+
+    for (std::size_t i = 0; i < layers.size(); ++i) {
+        int const tool_id = (*layer_tool_ids)[i];
+        if (!merged_layers.empty() && tool_id >= 0 && merged_tools.back() == tool_id) {
+            auto &dst = merged_layers.back();
+            auto &src = layers[i];
+            dst.insert(dst.end(), std::make_move_iterator(src.begin()), std::make_move_iterator(src.end()));
+            if (layer_labels && i < layer_labels->size() && !(*layer_labels)[i].empty()) {
+                if (merged_labels.back().empty()) {
+                    merged_labels.back() = (*layer_labels)[i];
+                } else {
+                    merged_labels.back() += " + ";
+                    merged_labels.back() += (*layer_labels)[i];
+                }
+            }
+            continue;
+        }
+
+        merged_layers.push_back(std::move(layers[i]));
+        merged_tools.push_back(tool_id);
+        if (layer_labels) {
+            merged_labels.push_back(i < layer_labels->size() ? (*layer_labels)[i] : Glib::ustring());
+        }
+    }
+
+    layers = std::move(merged_layers);
+    *layer_tool_ids = std::move(merged_tools);
+    if (layer_labels) {
+        *layer_labels = std::move(merged_labels);
+    }
+}
+
 static bool validate_layer_tool_ids_for_m6(PreparedPlotMm const &prep, std::string &err_out)
 {
     if (!prep.layered || prep.layers_mm.empty()) {
@@ -2000,6 +2584,9 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
         std::vector<std::vector<std::vector<Geom::Point>>> layers_doc;
         collect_layers_doc_strokes(ctx.desktop, doc, params.flatness, layers_doc, &prep.layer_tool_ids, &prep.layer_labels);
         if (layers_doc.size() > 1) {
+            if (!params.auto_pause_between_layers && params.enable_layer_tool_change_m6) {
+                coalesce_consecutive_same_tool_layers(layers_doc, &prep.layer_tool_ids, &prep.layer_labels);
+            }
             prep.layered = true;
             auto layers_doc_baseline = layers_doc;
             prep.layers_mm.resize(layers_doc.size());
@@ -2013,10 +2600,12 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
             if (params.contour_to_hatch) {
                 convert_closed_contours_to_hatch_layers(prep.layers_mm, params.hatch_spacing_mm,
                                                         params.hatch_angle_deg, params.hatch_cross,
+                                                        params.hatch_inset_enable, params.hatch_inset_mm,
                                                         params.hatch_angle_increment_enable,
-                                                        params.hatch_angle_increment_deg);
+                                                        params.hatch_angle_increment_deg, &prep.hatch_stats);
                 convert_closed_contours_to_hatch_layers(layers_mm_baseline, params.hatch_spacing_mm,
                                                         params.hatch_angle_deg, params.hatch_cross,
+                                                        params.hatch_inset_enable, params.hatch_inset_mm,
                                                         params.hatch_angle_increment_enable,
                                                         params.hatch_angle_increment_deg);
             }
@@ -2068,10 +2657,19 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
             log_grbl_stage_stats_layers("layered", "optimized", "after-sparse", prep.layers_mm, prep.layer_tool_ids, params);
             log_grbl_stage_stats_layers("layered", "baseline", "after-sparse", layers_mm_baseline, prep.layer_tool_ids, params);
             if (params.optimize_stroke_order) {
-                reorder_strokes_layers_nearest_neighbor(prep.layers_mm, params.optimize_stroke_direction);
+                reorder_strokes_layers_quantized_for_grbl(prep.layers_mm, params.optimize_stroke_direction);
             }
             log_grbl_stage_stats_layers("layered", "optimized", "after-reorder", prep.layers_mm, prep.layer_tool_ids, params);
             log_grbl_stage_stats_layers("layered", "baseline", "after-reorder", layers_mm_baseline, prep.layer_tool_ids, params);
+            merge_exact_touching_strokes_layers(prep.layers_mm);
+            merge_exact_touching_strokes_layers(layers_mm_baseline);
+            log_grbl_stage_stats_layers("layered", "optimized", "after-exact-join", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-exact-join", layers_mm_baseline, prep.layer_tool_ids, params);
+            if (params.optimize_stroke_order) {
+                reorder_strokes_layers_nearest_neighbor(prep.layers_mm, params.optimize_stroke_direction);
+            }
+            log_grbl_stage_stats_layers("layered", "optimized", "after-exact-reorder", prep.layers_mm, prep.layer_tool_ids, params);
+            log_grbl_stage_stats_layers("layered", "baseline", "after-exact-reorder", layers_mm_baseline, prep.layer_tool_ids, params);
             if (params.enable_near_connect) {
                 // Run bridge-joining after whole-stroke reordering so adjacent strokes are already spatial neighbors.
                 connect_nearby_strokes_layers(prep.layers_mm, params.near_connect_distance_mm);
@@ -2148,10 +2746,12 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     strokes_doc_to_mm(strokes_doc_baseline, mapper, flat_mm_baseline);
     if (params.contour_to_hatch) {
         convert_closed_contours_to_hatch(prep.flat_mm, params.hatch_spacing_mm, params.hatch_angle_deg,
-                                         params.hatch_cross, params.hatch_angle_increment_enable,
-                                         params.hatch_angle_increment_deg);
+                                         params.hatch_cross, params.hatch_inset_enable,
+                                         params.hatch_inset_mm, params.hatch_angle_increment_enable,
+                                         params.hatch_angle_increment_deg, &prep.hatch_stats);
         convert_closed_contours_to_hatch(flat_mm_baseline, params.hatch_spacing_mm, params.hatch_angle_deg,
-                                         params.hatch_cross, params.hatch_angle_increment_enable,
+                                         params.hatch_cross, params.hatch_inset_enable,
+                                         params.hatch_inset_mm, params.hatch_angle_increment_enable,
                                          params.hatch_angle_increment_deg);
     }
     log_grbl_stage_stats("flat", "optimized", "after-doc-to-mm", prep.flat_mm, params);
@@ -2201,10 +2801,19 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     log_grbl_stage_stats("flat", "optimized", "after-sparse", prep.flat_mm, params);
     log_grbl_stage_stats("flat", "baseline", "after-sparse", flat_mm_baseline, params);
     if (params.optimize_stroke_order && prep.flat_mm.size() > 1) {
-        reorder_strokes_nearest_neighbor(prep.flat_mm, params.optimize_stroke_direction);
+        reorder_strokes_quantized_for_grbl(prep.flat_mm, params.optimize_stroke_direction);
     }
     log_grbl_stage_stats("flat", "optimized", "after-reorder", prep.flat_mm, params);
     log_grbl_stage_stats("flat", "baseline", "after-reorder", flat_mm_baseline, params);
+    merge_exact_touching_strokes(prep.flat_mm);
+    merge_exact_touching_strokes(flat_mm_baseline);
+    log_grbl_stage_stats("flat", "optimized", "after-exact-join", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-exact-join", flat_mm_baseline, params);
+    if (params.optimize_stroke_order && prep.flat_mm.size() > 1) {
+        reorder_strokes_nearest_neighbor(prep.flat_mm, params.optimize_stroke_direction);
+    }
+    log_grbl_stage_stats("flat", "optimized", "after-exact-reorder", prep.flat_mm, params);
+    log_grbl_stage_stats("flat", "baseline", "after-exact-reorder", flat_mm_baseline, params);
     if (params.enable_near_connect) {
         // Run bridge-joining after whole-stroke reordering so adjacent strokes are already spatial neighbors.
         connect_nearby_strokes(prep.flat_mm, params.near_connect_distance_mm);
@@ -2765,6 +3374,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     constexpr auto k_hatch_spacing = "/options/grbl/hatch-spacing-mm";
     constexpr auto k_hatch_angle = "/options/grbl/hatch-angle-deg";
     constexpr auto k_hatch_cross = "/options/grbl/hatch-cross";
+    constexpr auto k_hatch_inset_enable = "/options/grbl/hatch-inset-enable";
+    constexpr auto k_hatch_inset_mm = "/options/grbl/hatch-inset-mm";
     constexpr auto k_hatch_angle_increment_enable = "/options/grbl/hatch-angle-increment-enable";
     constexpr auto k_hatch_angle_increment_deg = "/options/grbl/hatch-angle-increment-deg";
     constexpr auto k_flip = "/options/grbl/flip-y-canvas";
@@ -2822,6 +3433,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     params.hatch_spacing_mm = prefs->getDoubleLimited(k_hatch_spacing, 1.0, 0.05, 100.0);
     params.hatch_angle_deg = prefs->getDoubleLimited(k_hatch_angle, 0.0, -180.0, 180.0);
     params.hatch_cross = prefs->getBool(k_hatch_cross, false);
+    params.hatch_inset_enable = prefs->getBool(k_hatch_inset_enable, false);
+    params.hatch_inset_mm = prefs->getDoubleLimited(k_hatch_inset_mm, 0.1, 0.0, 100.0);
     params.hatch_angle_increment_enable = prefs->getBool(k_hatch_angle_increment_enable, false);
     params.hatch_angle_increment_deg = prefs->getDoubleLimited(k_hatch_angle_increment_deg, 5.0, -180.0, 180.0);
     params.flip_y_canvas = prefs->getBool(k_flip, false);
@@ -2869,19 +3482,29 @@ static bool collect_preview_doc_strokes(SPDocument *doc, GrblExportParams const 
 
     if (wants_layered_pause(params, ctx)) {
         std::vector<std::vector<std::vector<Geom::Point>>> layers_doc;
-        collect_layers_doc_strokes(ctx.desktop, doc, params.flatness, layers_doc);
+        std::vector<int> preview_tool_ids;
+        collect_layers_doc_strokes(ctx.desktop, doc, params.flatness, layers_doc, &preview_tool_ids);
         if (layers_doc.size() > 1) {
+            if (!params.auto_pause_between_layers && params.enable_layer_tool_change_m6) {
+                coalesce_consecutive_same_tool_layers(layers_doc, &preview_tool_ids, nullptr);
+            }
+            auto const mapper = build_document_mm_mapper(doc);
+            double const quantum_doc = 0.001 * mapper.avg_doc_units_per_mm();
+            double const spacing_doc = params.hatch_spacing_mm * mapper.avg_doc_units_per_mm();
+            double const inset_doc = params.hatch_inset_mm * mapper.avg_doc_units_per_mm();
             for (std::size_t i = 0; i < layers_doc.size(); ++i) {
                 auto layer_doc = layers_doc[i];
+                if (params.optimize_stroke_order && layer_doc.size() > 1) {
+                    reorder_strokes_quantized_for_grbl(layer_doc, params.optimize_stroke_direction, quantum_doc);
+                }
+                merge_exact_touching_strokes(layer_doc, 1e-9);
                 if (params.optimize_stroke_order && layer_doc.size() > 1) {
                     reorder_strokes_nearest_neighbor(layer_doc, params.optimize_stroke_direction);
                 }
                 if (params.contour_to_hatch) {
-                    auto const mapper = build_document_mm_mapper(doc);
-                    double const spacing_doc = params.hatch_spacing_mm * mapper.avg_doc_units_per_mm();
                     convert_closed_contours_to_hatch(layer_doc, spacing_doc, params.hatch_angle_deg, params.hatch_cross,
-                                                     params.hatch_angle_increment_enable,
-                                                     params.hatch_angle_increment_deg);
+                                                     params.hatch_inset_enable, inset_doc,
+                                                     params.hatch_angle_increment_enable, params.hatch_angle_increment_deg);
                 }
                 for (auto &st : layer_doc) {
                     if (st.size() >= 2) {
@@ -2903,14 +3526,21 @@ static bool collect_preview_doc_strokes(SPDocument *doc, GrblExportParams const 
         err_out = grbl_error_user_cancelled();
         return false;
     }
+    auto const mapper = build_document_mm_mapper(doc);
+    double const quantum_doc = 0.001 * mapper.avg_doc_units_per_mm();
+    if (params.optimize_stroke_order && strokes_doc.size() > 1) {
+        reorder_strokes_quantized_for_grbl(strokes_doc, params.optimize_stroke_direction, quantum_doc);
+    }
+    merge_exact_touching_strokes(strokes_doc, 1e-9);
     if (params.optimize_stroke_order && strokes_doc.size() > 1) {
         reorder_strokes_nearest_neighbor(strokes_doc, params.optimize_stroke_direction);
     }
     if (params.contour_to_hatch) {
-        auto const mapper = build_document_mm_mapper(doc);
         double const spacing_doc = params.hatch_spacing_mm * mapper.avg_doc_units_per_mm();
+        double const inset_doc = params.hatch_inset_mm * mapper.avg_doc_units_per_mm();
         convert_closed_contours_to_hatch(strokes_doc, spacing_doc, params.hatch_angle_deg, params.hatch_cross,
-                                         params.hatch_angle_increment_enable, params.hatch_angle_increment_deg);
+                                         params.hatch_inset_enable, inset_doc, params.hatch_angle_increment_enable,
+                                         params.hatch_angle_increment_deg);
     }
     constexpr std::size_t max_strokes = 200000;
     if (strokes_doc.size() > max_strokes) {

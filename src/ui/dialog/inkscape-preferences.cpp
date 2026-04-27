@@ -2672,6 +2672,8 @@ void InkscapePreferences::initPageIO()
     _grbl_hatch_spacing.init("/options/grbl/hatch-spacing-mm", 0.05, 100.0, 0.05, 0.5, 1.0, false, false);
     _grbl_hatch_angle.init("/options/grbl/hatch-angle-deg", -180.0, 180.0, 1.0, 10.0, 0.0, false, false);
     _grbl_hatch_cross.init(_("Add _cross hatch"), "/options/grbl/hatch-cross", false);
+    _grbl_hatch_inset_enable.init(_("Enable hatch _inset"), "/options/grbl/hatch-inset-enable", false);
+    _grbl_hatch_inset.init("/options/grbl/hatch-inset-mm", 0.0, 100.0, 0.05, 0.5, 0.1, false, false);
     _grbl_hatch_angle_increment_enable.init(_("Enable hatch angle _increment"),
                                             "/options/grbl/hatch-angle-increment-enable", false);
     _grbl_hatch_angle_increment.init("/options/grbl/hatch-angle-increment-deg", -180.0, 180.0, 1.0, 10.0, 5.0,
@@ -2689,6 +2691,14 @@ void InkscapePreferences::initPageIO()
         _("Add a second hatch pass rotated by 90 degrees from the main hatch angle. This increases line count and runtime."),
         true, reset_icon());
     _page_grbl.add_line(
+        false, "", _grbl_hatch_inset_enable, "",
+        _("Inset closed contours inward before hatch generation so the fill sits slightly inside the border. If the inset becomes invalid, export falls back to the original contour."),
+        true, reset_icon());
+    _page_grbl.add_line(
+        false, _("Hatch i_nset (mm):"), _grbl_hatch_inset, "",
+        _("Inset distance applied before hatch generation when hatch inset is enabled."),
+        false);
+    _page_grbl.add_line(
         false, "", _grbl_hatch_angle_increment_enable, "",
         _("After each closed contour is converted to hatch, rotate the next contour's hatch by the increment below."),
         true, reset_icon());
@@ -2701,6 +2711,8 @@ void InkscapePreferences::initPageIO()
     _grbl_hatch_spacing.set_sensitive(_grbl_contour_to_hatch.get_active());
     _grbl_hatch_angle.set_sensitive(_grbl_contour_to_hatch.get_active());
     _grbl_hatch_cross.set_sensitive(_grbl_contour_to_hatch.get_active());
+    _grbl_hatch_inset_enable.set_sensitive(_grbl_contour_to_hatch.get_active());
+    _grbl_hatch_inset.set_sensitive(_grbl_contour_to_hatch.get_active() && _grbl_hatch_inset_enable.get_active());
     _grbl_hatch_angle_increment_enable.set_sensitive(_grbl_contour_to_hatch.get_active());
     _grbl_hatch_angle_increment.set_sensitive(_grbl_contour_to_hatch.get_active() &&
                                               _grbl_hatch_angle_increment_enable.get_active());
@@ -2711,9 +2723,14 @@ void InkscapePreferences::initPageIO()
         _grbl_hatch_spacing.set_sensitive(_grbl_contour_to_hatch.get_active());
         _grbl_hatch_angle.set_sensitive(_grbl_contour_to_hatch.get_active());
         _grbl_hatch_cross.set_sensitive(_grbl_contour_to_hatch.get_active());
+        _grbl_hatch_inset_enable.set_sensitive(_grbl_contour_to_hatch.get_active());
+        _grbl_hatch_inset.set_sensitive(_grbl_contour_to_hatch.get_active() && _grbl_hatch_inset_enable.get_active());
         _grbl_hatch_angle_increment_enable.set_sensitive(_grbl_contour_to_hatch.get_active());
         _grbl_hatch_angle_increment.set_sensitive(_grbl_contour_to_hatch.get_active() &&
                                                   _grbl_hatch_angle_increment_enable.get_active());
+    });
+    _grbl_hatch_inset_enable.changed_signal.connect([this](bool) {
+        _grbl_hatch_inset.set_sensitive(_grbl_contour_to_hatch.get_active() && _grbl_hatch_inset_enable.get_active());
     });
     _grbl_hatch_angle_increment_enable.changed_signal.connect([this](bool) {
         _grbl_hatch_angle_increment.set_sensitive(_grbl_contour_to_hatch.get_active() &&

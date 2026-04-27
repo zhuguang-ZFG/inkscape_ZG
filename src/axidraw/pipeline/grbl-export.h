@@ -87,6 +87,9 @@ struct GrblExportParams {
     double hatch_spacing_mm = 1.0;
     /// Hatch line angle in degrees (0 = horizontal scanlines in machine coordinates).
     double hatch_angle_deg = 0.0;
+    /// Before hatch generation, offset each closed contour inward by this amount to keep fill off the border.
+    bool hatch_inset_enable = false;
+    double hatch_inset_mm = 0.1;
     /// After each closed contour converted to hatch, increment the hatch angle by @a hatch_angle_increment_deg.
     bool hatch_angle_increment_enable = false;
     double hatch_angle_increment_deg = 5.0;
@@ -166,6 +169,12 @@ struct GrblPlotStats {
     std::size_t stroke_count = 0;
     std::size_t layer_count = 0;
     std::size_t tool_change_count = 0;
+    bool contour_to_hatch_requested = false;
+    bool hatch_inset_requested = false;
+    std::size_t hatch_closed_contour_candidates = 0;
+    std::size_t hatch_converted_contours = 0;
+    std::size_t hatch_inset_applied_contours = 0;
+    std::size_t hatch_inset_fallback_contours = 0;
     bool has_bounds_mm = false;
     double min_x_mm = 0;
     double min_y_mm = 0;
