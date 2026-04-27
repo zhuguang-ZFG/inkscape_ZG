@@ -124,6 +124,24 @@ namespace {
 constexpr auto k_pref_grbl_layer = "/options/grbl/limit-to-current-layer";
 constexpr std::size_t k_max_grbl_gcode_file_bytes = 32u * 1024u * 1024u;
 
+void apply_ui_language_preference_env()
+{
+    auto *prefs = Inkscape::Preferences::get();
+    auto ui_language = prefs->getString("/ui/language");
+    if (ui_language.empty()) {
+        return;
+    }
+
+    Glib::setenv("LANGUAGE", ui_language.raw(), true);
+#ifdef _WIN32
+    // Let gettext see the preferred UI language before it initializes.
+    // We keep the process numeric locale normalized to "C", but avoid pinning
+    // the translation lookup to the hard-coded C locale.
+    Glib::unsetenv("LC_ALL");
+    Glib::setenv("LANG", ui_language.raw(), true);
+#endif
+}
+
 std::string derive_grbl_export_filename(std::string const &requested_path, std::string const &input_path)
 {
     if (!requested_path.empty()) {
@@ -706,6 +724,8 @@ InkscapeApplication::InkscapeApplication()
     Inkscape::GC::init();
 
     auto *gapp = gio_app();
+
+    apply_ui_language_preference_env();
 
     // Native Language Support
     Inkscape::initialize_gettext();

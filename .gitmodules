@@ -1,6 +1,7 @@
 [submodule "share/extensions"]
 	path = share/extensions
-	url = https://gitlab.com/inkscape/extensions.git
+	url = https://github.com/zhuguang-ZFG/inkscape_ZG.git
+	branch = extensions-zg
 [submodule "src/3rdparty/2geom"]
 	path = src/3rdparty/2geom
 	url = https://gitlab.com/inkscape/lib2geom.git

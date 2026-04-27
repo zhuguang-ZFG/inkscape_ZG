@@ -56,8 +56,16 @@ constexpr double k_mm_per_in = 25.4;
 constexpr double k_px_per_in = 96.0;
 constexpr double k_mm_per_px = k_mm_per_in / k_px_per_in;
 constexpr double k_machine_coord_epsilon_mm = 1e-3;
+constexpr auto k_default_pen_up_gcode = "G90\nG1 Z0 F3000";
+constexpr auto k_default_pen_down_gcode = "G90\nG1 Z5 F3000";
+constexpr auto k_legacy_pen_up_gcode = "G91\nG1 Z-5 F10000\nG90";
+constexpr auto k_legacy_pen_down_gcode = "G91\nG1 Z5 F10000\nG90";
+constexpr auto k_default_end_gcode = "G0 X0 Y0";
 constexpr auto k_pref_clip_bed = "/options/grbl/clip-to-machine-bed";
 constexpr auto k_pref_clip_bed_migration_v1 = "/options/grbl/migrations/clip-to-machine-bed-default-v1";
+constexpr auto k_pref_end_gcode = "/options/grbl/end-gcode";
+constexpr auto k_pref_end_gcode_migration_v1 = "/options/grbl/migrations/end-gcode-default-v1";
+constexpr auto k_pref_pen_z_absolute_migration_v1 = "/options/grbl/migrations/pen-z-absolute-default-v1";
 
 void migrate_clip_to_machine_bed_default(Inkscape::Preferences *prefs)
 {
@@ -68,6 +76,44 @@ void migrate_clip_to_machine_bed_default(Inkscape::Preferences *prefs)
     prefs->setBool(k_pref_clip_bed, true);
     prefs->setBool(k_pref_clip_bed_migration_v1, true);
     prefs->save();
+}
+
+void migrate_end_gcode_default(Inkscape::Preferences *prefs)
+{
+    if (!prefs || prefs->getEntry(k_pref_end_gcode_migration_v1).isSet()) {
+        return;
+    }
+
+    auto end_gcode = prefs->getString(k_pref_end_gcode);
+    if (end_gcode.find_first_not_of(" \t\r\n") == std::string::npos) {
+        prefs->setString(k_pref_end_gcode, k_default_end_gcode);
+    }
+    prefs->setBool(k_pref_end_gcode_migration_v1, true);
+    prefs->save();
+}
+
+void migrate_pen_z_absolute_default(Inkscape::Preferences *prefs)
+{
+    if (!prefs || prefs->getEntry(k_pref_pen_z_absolute_migration_v1).isSet()) {
+        return;
+    }
+
+    constexpr auto k_pref_pen_up = "/options/grbl/pen-up-cmd";
+    constexpr auto k_pref_pen_down = "/options/grbl/pen-down-cmd";
+
+    auto const pen_up = prefs->getString(k_pref_pen_up);
+    auto const pen_down = prefs->getString(k_pref_pen_down);
+    if (pen_up == k_legacy_pen_up_gcode && pen_down == k_legacy_pen_down_gcode) {
+        prefs->setString(k_pref_pen_up, k_default_pen_up_gcode);
+        prefs->setString(k_pref_pen_down, k_default_pen_down_gcode);
+    }
+    prefs->setBool(k_pref_pen_z_absolute_migration_v1, true);
+    prefs->save();
+}
+
+std::string normalize_end_gcode(std::string value)
+{
+    return value;
 }
 
 bool emit_optional_dwell_ms(std::function<bool(std::string const &)> const &emit_line, double const delay_ms)
@@ -1253,7 +1299,8 @@ static void apply_flip_y_canvas(std::vector<std::vector<Geom::Point>> &strokes, 
     }
 }
 
-static void apply_axis_mapping(std::vector<std::vector<Geom::Point>> &strokes, bool swap_xy, bool invert_x, bool invert_y)
+static void apply_axis_mapping(std::vector<std::vector<Geom::Point>> &strokes, bool swap_xy, bool invert_x, bool invert_y,
+                               double machine_bed_width_mm, double machine_bed_depth_mm)
 {
     if (!swap_xy && !invert_x && !invert_y) {
         return;
@@ -1263,14 +1310,25 @@ static void apply_axis_mapping(std::vector<std::vector<Geom::Point>> &strokes, b
             if (swap_xy) {
                 std::swap(p[Geom::X], p[Geom::Y]);
             }
+            auto const mapped_bed_width_mm = swap_xy ? machine_bed_depth_mm : machine_bed_width_mm;
+            auto const mapped_bed_depth_mm = swap_xy ? machine_bed_width_mm : machine_bed_depth_mm;
             if (invert_x) {
-                p[Geom::X] = -p[Geom::X];
+                p[Geom::X] = mapped_bed_width_mm > 1e-6 ? (mapped_bed_width_mm - p[Geom::X]) : -p[Geom::X];
             }
             if (invert_y) {
-                p[Geom::Y] = -p[Geom::Y];
+                p[Geom::Y] = mapped_bed_depth_mm > 1e-6 ? (mapped_bed_depth_mm - p[Geom::Y]) : -p[Geom::Y];
             }
         }
     }
+}
+
+static std::pair<double, double> get_mapped_machine_bed_dims(bool swap_xy, double machine_bed_width_mm,
+                                                             double machine_bed_depth_mm)
+{
+    if (swap_xy) {
+        return {machine_bed_depth_mm, machine_bed_width_mm};
+    }
+    return {machine_bed_width_mm, machine_bed_depth_mm};
 }
 
 /** @param shift_x_out / shift_y_out when non-null, receive the minima subtracted (mm). */
@@ -1789,8 +1847,57 @@ static void sparse_sample_strokes_layers(std::vector<std::vector<std::vector<Geo
 
 static std::size_t count_custom_gcode_lines(Glib::ustring const &block)
 {
+    auto for_each_gcode_block_line = [](std::string block, auto &&fn) {
+        for (auto &ch : block) {
+            if (ch == '\r' || ch == '\0') {
+                ch = '\n';
+            }
+        }
+
+        std::istringstream in(block);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            auto pos = line.find_first_not_of(" \t");
+            if (pos == std::string::npos) {
+                continue;
+            }
+            line.erase(0, pos);
+            while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
+                line.pop_back();
+            }
+            if (line.empty() || line[0] == ';') {
+                continue;
+            }
+            if (line[0] == '(') {
+                auto const end = line.find(')');
+                if (end != std::string::npos && end + 1 == line.size()) {
+                    continue;
+                }
+            }
+            fn(line);
+        }
+    };
+
     std::size_t count = 0;
-    std::istringstream in(block.raw());
+    for_each_gcode_block_line(block.raw(), [&](std::string const &) {
+        ++count;
+    });
+    return count;
+}
+
+template <typename Fn>
+static bool for_each_trimmed_gcode_line(std::string block, Fn &&fn)
+{
+    for (auto &ch : block) {
+        if (ch == '\r' || ch == '\0') {
+            ch = '\n';
+        }
+    }
+
+    std::istringstream in(block);
     std::string line;
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') {
@@ -1813,9 +1920,11 @@ static std::size_t count_custom_gcode_lines(Glib::ustring const &block)
                 continue;
             }
         }
-        ++count;
+        if (!fn(line)) {
+            return false;
+        }
     }
-    return count;
+    return true;
 }
 
 } // namespace
@@ -1838,6 +1947,8 @@ struct PreparedPlotMm {
     bool preview_invert_x_applied = false;
     bool preview_invert_y_applied = false;
     bool preview_clip_applied = false;
+    double preview_machine_bed_width_mm = 0;
+    double preview_machine_bed_depth_mm = 0;
     bool has_travel_optimization_stats = false;
     double travel_length_before_optimization_mm = 0;
 
@@ -2349,10 +2460,11 @@ static void apply_flip_y_to_layers(std::vector<std::vector<std::vector<Geom::Poi
 }
 
 static void apply_axis_mapping_to_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers, bool swap_xy,
-                                         bool invert_x, bool invert_y)
+                                         bool invert_x, bool invert_y, double machine_bed_width_mm,
+                                         double machine_bed_depth_mm)
 {
     for (auto &layer : layers) {
-        apply_axis_mapping(layer, swap_xy, invert_x, invert_y);
+        apply_axis_mapping(layer, swap_xy, invert_x, invert_y, machine_bed_width_mm, machine_bed_depth_mm);
     }
 }
 
@@ -2568,6 +2680,8 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     prep.preview_invert_x_applied = false;
     prep.preview_invert_y_applied = false;
     prep.preview_clip_applied = false;
+    prep.preview_machine_bed_width_mm = params.machine_bed_width_mm;
+    prep.preview_machine_bed_depth_mm = params.machine_bed_depth_mm;
 
     if (!doc) {
         err_out = _("Invalid document.");
@@ -2619,8 +2733,10 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
                 prep.preview_flip_y_applied = true;
                 prep.preview_page_h_mm = page_h;
             }
-            apply_axis_mapping_to_layers(prep.layers_mm, params.swap_xy, params.invert_x, params.invert_y);
-            apply_axis_mapping_to_layers(layers_mm_baseline, params.swap_xy, params.invert_x, params.invert_y);
+            apply_axis_mapping_to_layers(prep.layers_mm, params.swap_xy, params.invert_x, params.invert_y,
+                                         params.machine_bed_width_mm, params.machine_bed_depth_mm);
+            apply_axis_mapping_to_layers(layers_mm_baseline, params.swap_xy, params.invert_x, params.invert_y,
+                                         params.machine_bed_width_mm, params.machine_bed_depth_mm);
             prep.preview_swap_xy_applied = params.swap_xy;
             prep.preview_invert_x_applied = params.invert_x;
             prep.preview_invert_y_applied = params.invert_y;
@@ -2639,11 +2755,13 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
             log_grbl_stage_stats_layers("layered", "optimized", "after-align", prep.layers_mm, prep.layer_tool_ids, params);
             log_grbl_stage_stats_layers("layered", "baseline", "after-align", layers_mm_baseline, prep.layer_tool_ids, params);
             if (params.clip_to_machine_bed && params.machine_bed_width_mm > 1e-6 && params.machine_bed_depth_mm > 1e-6) {
+                auto const [clip_bed_width_mm, clip_bed_depth_mm] =
+                    get_mapped_machine_bed_dims(params.swap_xy, params.machine_bed_width_mm, params.machine_bed_depth_mm);
                 for (auto &layer : prep.layers_mm) {
-                    clip_strokes_to_axis_rect(layer, 0, 0, params.machine_bed_width_mm, params.machine_bed_depth_mm);
+                    clip_strokes_to_axis_rect(layer, 0, 0, clip_bed_width_mm, clip_bed_depth_mm);
                 }
                 for (auto &layer : layers_mm_baseline) {
-                    clip_strokes_to_axis_rect(layer, 0, 0, params.machine_bed_width_mm, params.machine_bed_depth_mm);
+                    clip_strokes_to_axis_rect(layer, 0, 0, clip_bed_width_mm, clip_bed_depth_mm);
                 }
                 prep.preview_clip_applied = true;
             }
@@ -2768,8 +2886,10 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
         prep.preview_flip_y_applied = true;
         prep.preview_page_h_mm = ph;
     }
-    apply_axis_mapping(prep.flat_mm, params.swap_xy, params.invert_x, params.invert_y);
-    apply_axis_mapping(flat_mm_baseline, params.swap_xy, params.invert_x, params.invert_y);
+    apply_axis_mapping(prep.flat_mm, params.swap_xy, params.invert_x, params.invert_y,
+                       params.machine_bed_width_mm, params.machine_bed_depth_mm);
+    apply_axis_mapping(flat_mm_baseline, params.swap_xy, params.invert_x, params.invert_y,
+                       params.machine_bed_width_mm, params.machine_bed_depth_mm);
     prep.preview_swap_xy_applied = params.swap_xy;
     prep.preview_invert_x_applied = params.invert_x;
     prep.preview_invert_y_applied = params.invert_y;
@@ -2788,8 +2908,10 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     log_grbl_stage_stats("flat", "optimized", "after-align", prep.flat_mm, params);
     log_grbl_stage_stats("flat", "baseline", "after-align", flat_mm_baseline, params);
     if (params.clip_to_machine_bed && params.machine_bed_width_mm > 1e-6 && params.machine_bed_depth_mm > 1e-6) {
-        clip_strokes_to_axis_rect(prep.flat_mm, 0, 0, params.machine_bed_width_mm, params.machine_bed_depth_mm);
-        clip_strokes_to_axis_rect(flat_mm_baseline, 0, 0, params.machine_bed_width_mm, params.machine_bed_depth_mm);
+        auto const [clip_bed_width_mm, clip_bed_depth_mm] =
+            get_mapped_machine_bed_dims(params.swap_xy, params.machine_bed_width_mm, params.machine_bed_depth_mm);
+        clip_strokes_to_axis_rect(prep.flat_mm, 0, 0, clip_bed_width_mm, clip_bed_depth_mm);
+        clip_strokes_to_axis_rect(flat_mm_baseline, 0, 0, clip_bed_width_mm, clip_bed_depth_mm);
         prep.preview_clip_applied = true;
     }
     log_grbl_stage_stats("flat", "optimized", "after-clip", prep.flat_mm, params);
@@ -2955,6 +3077,11 @@ static bool emit_line_impl(SerialPort *port, std::string *gcode_out, std::size_t
         err_out = grbl_error_user_cancelled();
         return false;
     }
+    if (line.find_first_of("\r\n\0", 0, 3) != std::string::npos) {
+        return for_each_trimmed_gcode_line(line, [&](std::string const &subline) {
+            return emit_line_impl(port, gcode_out, max_out_bytes, ctx, err_out, subline);
+        });
+    }
     if (port) {
         if (!grbl_send_line(*port, line, err_out)) {
             return false;
@@ -2979,34 +3106,18 @@ static bool emit_line_impl(SerialPort *port, std::string *gcode_out, std::size_t
 static bool emit_custom_gcode_block(SerialPort *port, std::string *gcode_out, std::size_t max_out_bytes,
                                     GrblExportContext const &ctx, std::string &err_out, Glib::ustring const &block)
 {
-    std::istringstream in(block.raw());
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        auto pos = line.find_first_not_of(" \t");
-        if (pos == std::string::npos) {
-            continue;
-        }
-        line.erase(0, pos);
-        while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
-            line.pop_back();
-        }
-        if (line.empty() || line[0] == ';') {
-            continue;
-        }
-        if (line[0] == '(') {
-            auto const end = line.find(')');
-            if (end != std::string::npos && end + 1 == line.size()) {
-                continue;
-            }
-        }
+    return for_each_trimmed_gcode_line(block.raw(), [&](std::string const &line) {
         if (!emit_line_impl(port, gcode_out, max_out_bytes, ctx, err_out, line)) {
             return false;
         }
-    }
-    return true;
+        return true;
+    });
+}
+
+static bool emit_pen_gcode_block(SerialPort *port, std::string *gcode_out, std::size_t max_out_bytes,
+                                 GrblExportContext const &ctx, std::string &err_out, Glib::ustring const &block)
+{
+    return emit_custom_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, block);
 }
 
 static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::size_t max_out_bytes,
@@ -3028,7 +3139,11 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
     if (!emit_line("G90")) {
         return false;
     }
-    if (!emit_line("G92 X0 Y0 Z0")) {
+    // Keep work XY origin pinned to the current pen location, but do not remap Z.
+    // Remapping Z with G92 makes pen-up / pen-down commands depend on the machine's
+    // incidental starting height, which can leave a later `G1 Z5` effectively
+    // stationary even though the controller returns `ok`.
+    if (!emit_line("G92 X0 Y0")) {
         return false;
     }
     if (!emit_custom_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, params.start_gcode)) {
@@ -3056,7 +3171,7 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
 
         double const travel_dist = Geom::L2(stroke.front() - (has_prev_end ? prev_end : Geom::Point(0, 0)));
         bool const use_long_pen_up = params.enable_long_pen_up && travel_dist >= params.long_move_distance_mm;
-        if (!emit_line((use_long_pen_up ? long_pen_up : pen_up).raw())) {
+        if (!emit_pen_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, use_long_pen_up ? long_pen_up : pen_up)) {
             return false;
         }
         if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
@@ -3069,7 +3184,7 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
             }
         }
 
-        if (!emit_line(pen_dn.raw())) {
+        if (!emit_pen_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, pen_dn)) {
             return false;
         }
         if (!emit_optional_dwell_ms(emit_line, params.pen_down_delay_ms)) {
@@ -3089,7 +3204,7 @@ static bool emit_strokes_flat(SerialPort *port, std::string *gcode_out, std::siz
         }
     }
 
-    if (!emit_line(pen_up.raw())) {
+    if (!emit_pen_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, pen_up)) {
         return false;
     }
     if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
@@ -3121,7 +3236,11 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
     if (!emit_line("G90")) {
         return false;
     }
-    if (!emit_line("G92 X0 Y0 Z0")) {
+    // Keep work XY origin pinned to the current pen location, but do not remap Z.
+    // Remapping Z with G92 makes pen-up / pen-down commands depend on the machine's
+    // incidental starting height, which can leave a later `G1 Z5` effectively
+    // stationary even though the controller returns `ok`.
+    if (!emit_line("G92 X0 Y0")) {
         return false;
     }
     if (!emit_custom_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, params.start_gcode)) {
@@ -3151,7 +3270,7 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
             }
             double const travel_dist = Geom::L2(stroke.front() - (has_last ? last_mm : Geom::Point(0, 0)));
             bool const use_long_pen_up = params.enable_long_pen_up && travel_dist >= params.long_move_distance_mm;
-            if (!emit_line((use_long_pen_up ? long_pen_up : pen_up).raw())) {
+            if (!emit_pen_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, use_long_pen_up ? long_pen_up : pen_up)) {
                 return false;
             }
             if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
@@ -3162,7 +3281,7 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
                     return false;
                 }
             }
-            if (!emit_line(pen_dn.raw())) {
+            if (!emit_pen_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, pen_dn)) {
                 return false;
             }
             if (!emit_optional_dwell_ms(emit_line, params.pen_down_delay_ms)) {
@@ -3194,7 +3313,7 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
             }
             Geom::Point const resume = last_mm;
 
-            if (!emit_line(pen_up.raw())) {
+            if (!emit_pen_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, pen_up)) {
                 return false;
             }
             if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
@@ -3255,7 +3374,7 @@ static bool emit_strokes_layered(SerialPort *port, std::string *gcode_out, std::
         }
     }
 
-    if (!emit_line(pen_up.raw())) {
+    if (!emit_pen_gcode_block(port, gcode_out, max_out_bytes, ctx, err_out, pen_up)) {
         return false;
     }
     if (!emit_optional_dwell_ms(emit_line, params.pen_up_delay_ms)) {
@@ -3346,6 +3465,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
         return;
     }
     migrate_clip_to_machine_bed_default(prefs);
+    migrate_end_gcode_default(prefs);
+    migrate_pen_z_absolute_default(prefs);
     constexpr auto k_flat = "/options/grbl/flatness";
     constexpr auto k_fd = "/options/grbl/feed-draw-mmmin";
     constexpr auto k_ft = "/options/grbl/feed-travel-mmmin";
@@ -3395,7 +3516,6 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     constexpr auto k_tool_change_y = "/options/grbl/tool-change-y-mm";
     constexpr auto k_layer_dwell = "/options/grbl/auto-layer-pause-dwell-sec";
     constexpr auto k_start_gcode = "/options/grbl/start-gcode";
-    constexpr auto k_end_gcode = "/options/grbl/end-gcode";
 
     params.flatness = prefs->getDoubleLimited(k_flat, 0.08, 0.001, 10.0);
     params.feed_draw_mm_min = prefs->getDoubleLimited(k_fd, 1200.0, 60.0, 12000.0);
@@ -3407,8 +3527,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
             params.pen_down_cmd = "M3 S1000";
             params.enable_long_pen_up = false;
         } else {
-            params.pen_up_cmd = prefs->getString(k_pen_up, "G1 Z0 F3000");
-            params.pen_down_cmd = prefs->getString(k_pen_dn, "G1 Z5 F3000");
+            params.pen_up_cmd = prefs->getString(k_pen_up, k_default_pen_up_gcode);
+            params.pen_down_cmd = prefs->getString(k_pen_dn, k_default_pen_down_gcode);
             params.enable_long_pen_up = prefs->getBool(k_long_pen_up, false);
         }
     }
@@ -3443,8 +3563,8 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     params.invert_y = prefs->getBool(k_invert_y, false);
     params.align_content_min_to_origin = prefs->getBool(k_align, false);
     params.clip_to_machine_bed = prefs->getBool(k_pref_clip_bed, true);
-    params.machine_bed_width_mm = prefs->getDoubleLimited(k_bw, 300.0, 1.0, 2000.0);
-    params.machine_bed_depth_mm = prefs->getDoubleLimited(k_bd, 200.0, 1.0, 2000.0);
+    params.machine_bed_width_mm = prefs->getDoubleLimited(k_bw, 210.0, 1.0, 2000.0);
+    params.machine_bed_depth_mm = prefs->getDoubleLimited(k_bd, 297.0, 1.0, 2000.0);
     bool const auto_pause_between_layers = prefs->getBool(k_autopause, false);
     bool const manual_pen_change = prefs->getBool(k_manual_pen, false);
     params.pen_change_to_home = prefs->getBool(k_pen_ch_home, true);
@@ -3464,7 +3584,7 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     params.tool_change_y_mm = prefs->getDouble(k_tool_change_y);
     params.auto_layer_pause_dwell_sec = prefs->getDoubleLimited(k_layer_dwell, 0.0, 0.0, 600.0);
     params.start_gcode = prefs->getString(k_start_gcode, "");
-    params.end_gcode = prefs->getString(k_end_gcode, "");
+    params.end_gcode = normalize_end_gcode(prefs->getString(k_pref_end_gcode, k_default_end_gcode));
 }
 
 static bool collect_preview_doc_strokes(SPDocument *doc, GrblExportParams const &params, GrblExportContext const &ctx,
@@ -3622,11 +3742,15 @@ static Geom::Point mm_after_plot_mapping_toward_doc(Geom::Point mm, DocumentMmMa
         mm[Geom::X] += meta.preview_align_shift_x_mm;
         mm[Geom::Y] += meta.preview_align_shift_y_mm;
     }
+    auto const mapped_bed_width_mm = meta.preview_swap_xy_applied ? meta.preview_machine_bed_depth_mm
+                                                                  : meta.preview_machine_bed_width_mm;
+    auto const mapped_bed_depth_mm = meta.preview_swap_xy_applied ? meta.preview_machine_bed_width_mm
+                                                                  : meta.preview_machine_bed_depth_mm;
     if (meta.preview_invert_x_applied) {
-        mm[Geom::X] = -mm[Geom::X];
+        mm[Geom::X] = mapped_bed_width_mm > 1e-6 ? (mapped_bed_width_mm - mm[Geom::X]) : -mm[Geom::X];
     }
     if (meta.preview_invert_y_applied) {
-        mm[Geom::Y] = -mm[Geom::Y];
+        mm[Geom::Y] = mapped_bed_depth_mm > 1e-6 ? (mapped_bed_depth_mm - mm[Geom::Y]) : -mm[Geom::Y];
     }
     if (meta.preview_swap_xy_applied) {
         std::swap(mm[Geom::X], mm[Geom::Y]);

@@ -5,6 +5,7 @@
 #ifndef INKSCAPE_UI_DIALOG_GRBL_PANEL_MAPPING_PREFS_H
 #define INKSCAPE_UI_DIALOG_GRBL_PANEL_MAPPING_PREFS_H
 
+#include <span>
 #include <string>
 
 namespace Inkscape {
@@ -12,6 +13,13 @@ class Preferences;
 }
 
 namespace Inkscape::UI::Dialog {
+
+struct GrblBedPresetInfo
+{
+    char const *id = "";
+    double width_mm = 0.0;
+    double depth_mm = 0.0;
+};
 
 struct GrblPanelMappingPrefs
 {
@@ -47,10 +55,11 @@ struct GrblPanelMappingPrefs
     double hatch_angle = 0.0;
     double hatch_inset = 0.1;
     double hatch_angle_increment = 5.0;
-    std::string pen_up_cmd = "G1 Z0 F3000";
-    std::string pen_down_cmd = "G1 Z5 F3000";
-    double bed_width = 300.0;
-    double bed_depth = 200.0;
+    std::string pen_up_cmd = "G90\nG1 Z0 F3000";
+    std::string pen_down_cmd = "G90\nG1 Z5 F3000";
+    std::string bed_preset = "A4";
+    double bed_width = 210.0;
+    double bed_depth = 297.0;
     double long_pen_up_height = 10.0;
     double long_move_dist = 20.0;
     double near_connect_dist = 0.3;
@@ -63,6 +72,9 @@ struct GrblPanelMappingPrefs
 
 char const *get_grbl_tool_change_mode_id(bool auto_pause_between_layers, bool manual_pen_change, bool tool_change_m6);
 void apply_grbl_tool_change_mode_id(std::string const &mode_id, GrblPanelMappingPrefs &prefs);
+std::span<GrblBedPresetInfo const> get_grbl_bed_preset_definitions();
+bool lookup_grbl_bed_preset_dimensions(std::string const &id, double &width_mm, double &depth_mm);
+std::string infer_grbl_bed_preset_id(double width_mm, double depth_mm);
 GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs);
 void save_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs, GrblPanelMappingPrefs const &values);
 
