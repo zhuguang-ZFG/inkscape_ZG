@@ -15,11 +15,11 @@ GrblPlotFeedbackSchedulePlan make_grbl_plot_feedback_schedule_plan(bool const su
     GrblPlotFeedbackSchedulePlan plan;
     plan.refresh_summaries_requested = summaries_already_requested || refresh_summaries;
     plan.refresh_overlay_requested = overlay_already_requested || refresh_overlay;
+    plan.clear_preview_overlay = refresh_overlay;
     if (blocked) {
         return plan;
     }
 
-    plan.clear_preview_overlay = refresh_overlay;
     plan.queue_idle_refresh = !dispatch_pending && !timer_connected;
     return plan;
 }

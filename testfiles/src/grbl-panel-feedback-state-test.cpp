@@ -19,7 +19,7 @@ TEST(GrblPanelFeedbackStateTest, SchedulePlanQueuesIdleRefreshOnlyWhenUnblockedA
     auto const blocked = make_grbl_plot_feedback_schedule_plan(false, false, true, true, true, false, false);
     EXPECT_TRUE(blocked.refresh_summaries_requested);
     EXPECT_TRUE(blocked.refresh_overlay_requested);
-    EXPECT_FALSE(blocked.clear_preview_overlay);
+    EXPECT_TRUE(blocked.clear_preview_overlay);
     EXPECT_FALSE(blocked.queue_idle_refresh);
 }
 
