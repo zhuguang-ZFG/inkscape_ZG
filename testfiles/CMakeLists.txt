@@ -85,6 +85,7 @@ set(TEST_SOURCES
     util-uri-test
     drag-and-drop-svgz
     drawing-pattern-test
+    grbl-panel-document-geometry-test
     grbl-export-test
     split-path-test
     attributes-test
