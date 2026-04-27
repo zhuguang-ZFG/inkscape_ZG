@@ -70,6 +70,14 @@ void migrate_end_gcode_default(Inkscape::Preferences &prefs)
     prefs.save();
 }
 
+std::string normalize_end_gcode(std::string value)
+{
+    if (value.find_first_not_of(" \t\r\n") == std::string::npos) {
+        return k_default_end_gcode;
+    }
+    return value;
+}
+
 } // namespace
 
 GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs)
@@ -121,7 +129,7 @@ GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs
     values.tool_change_x = prefs.getDouble(k_pref_tool_change_x);
     values.tool_change_y = prefs.getDouble(k_pref_tool_change_y);
     values.start_gcode = prefs.getString(k_pref_start_gcode, "");
-    values.end_gcode = prefs.getString(k_pref_end_gcode, k_default_end_gcode);
+    values.end_gcode = normalize_end_gcode(prefs.getString(k_pref_end_gcode, k_default_end_gcode));
     return values;
 }
 

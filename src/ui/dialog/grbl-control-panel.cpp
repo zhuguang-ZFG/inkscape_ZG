@@ -101,6 +101,59 @@ using Inkscape::choose_file_save;
 
 namespace {
 
+constexpr auto k_default_end_gcode = "G0 X0 Y0";
+
+std::string normalize_editor_end_gcode_block(std::string text)
+{
+    if (text.find_first_not_of(" \t\r\n") == std::string::npos) {
+        return k_default_end_gcode;
+    }
+    return text;
+}
+
+std::vector<std::string> collect_executable_gcode_lines(std::string const &text)
+{
+    std::vector<std::string> lines;
+    for_each_executable_grbl_gcode_line(text, [&](std::string const &line) {
+        lines.push_back(line);
+        return true;
+    });
+    return lines;
+}
+
+bool editor_gcode_already_has_end_block(std::string const &text, std::string const &end_block)
+{
+    auto const text_lines = collect_executable_gcode_lines(text);
+    auto const end_lines = collect_executable_gcode_lines(end_block);
+    if (end_lines.empty() || text_lines.size() < end_lines.size()) {
+        return false;
+    }
+
+    auto const offset = text_lines.size() - end_lines.size();
+    for (std::size_t i = 0; i < end_lines.size(); ++i) {
+        if (text_lines[offset + i] != end_lines[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void append_editor_end_gcode_if_missing(std::string &text, std::string const &end_block)
+{
+    auto const normalized_end_block = normalize_editor_end_gcode_block(end_block);
+    if (editor_gcode_already_has_end_block(text, normalized_end_block)) {
+        return;
+    }
+
+    if (!text.empty() && text.back() != '\n') {
+        text.push_back('\n');
+    }
+    text += normalized_end_block;
+    if (text.empty() || text.back() != '\n') {
+        text.push_back('\n');
+    }
+}
+
 void append_axis_arrow(Geom::PathVector &paths, Geom::Point const &from, Geom::Point const &to, double head_len, double head_width)
 {
     Geom::Path shaft(from);
@@ -2483,6 +2536,9 @@ void GrblControlPanel::on_send_gcode()
         post_status(block_reason, true);
         return;
     }
+
+    auto const mapping_prefs = read_mapping_preferences_from_ui();
+    append_editor_end_gcode_if_missing(text, mapping_prefs.end_gcode);
 
     std::size_t const total_exec = count_executable_editor_gcode_lines(text, k_max_gcode_stream_lines);
     if (!begin_gcode_stream_ui(GrblGcodeStartOrigin::editor_gcode)) {

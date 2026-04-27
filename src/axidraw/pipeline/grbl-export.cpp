@@ -87,6 +87,14 @@ void migrate_end_gcode_default(Inkscape::Preferences *prefs)
     prefs->save();
 }
 
+std::string normalize_end_gcode(std::string value)
+{
+    if (value.find_first_not_of(" \t\r\n") == std::string::npos) {
+        return k_default_end_gcode;
+    }
+    return value;
+}
+
 bool emit_optional_dwell_ms(std::function<bool(std::string const &)> const &emit_line, double const delay_ms)
 {
     if (!(delay_ms > 1e-9)) {
@@ -3481,7 +3489,7 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     params.tool_change_y_mm = prefs->getDouble(k_tool_change_y);
     params.auto_layer_pause_dwell_sec = prefs->getDoubleLimited(k_layer_dwell, 0.0, 0.0, 600.0);
     params.start_gcode = prefs->getString(k_start_gcode, "");
-    params.end_gcode = prefs->getString(k_pref_end_gcode, k_default_end_gcode);
+    params.end_gcode = normalize_end_gcode(prefs->getString(k_pref_end_gcode, k_default_end_gcode));
 }
 
 static bool collect_preview_doc_strokes(SPDocument *doc, GrblExportParams const &params, GrblExportContext const &ctx,
