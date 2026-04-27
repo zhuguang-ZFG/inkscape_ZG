@@ -115,9 +115,6 @@ Glib::ustring build_bed_preset_label(std::string const &id, double const width_m
 
 std::string normalize_editor_end_gcode_block(std::string text)
 {
-    if (text.find_first_not_of(" \t\r\n") == std::string::npos) {
-        return k_default_end_gcode;
-    }
     return text;
 }
 
@@ -151,6 +148,9 @@ bool editor_gcode_already_has_end_block(std::string const &text, std::string con
 void append_editor_end_gcode_if_missing(std::string &text, std::string const &end_block)
 {
     auto const normalized_end_block = normalize_editor_end_gcode_block(end_block);
+    if (normalized_end_block.find_first_not_of(" \t\r\n") == std::string::npos) {
+        return;
+    }
     if (editor_gcode_already_has_end_block(text, normalized_end_block)) {
         return;
     }
@@ -511,7 +511,7 @@ void GrblControlPanel::on_unmap()
 
 void GrblControlPanel::desktopReplaced()
 {
-    schedule_plot_feedback_refresh(true);
+    request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::document_content_changed);
 }
 
 void GrblControlPanel::documentReplaced()
@@ -519,23 +519,23 @@ void GrblControlPanel::documentReplaced()
     _document_modified.disconnect();
     if (auto *doc = getDocument()) {
         _document_modified = doc->connectModified([this](unsigned /*flags*/) {
-            schedule_plot_feedback_refresh(true);
+            request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::document_content_changed);
         });
     }
     clear_grbl_page_restore_state(_page_restore_state);
     update_page_restore_button();
-    schedule_plot_feedback_refresh(true);
+    request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::document_content_changed);
     update_editor_gcode_generation_state_status();
 }
 
 void GrblControlPanel::selectionChanged(Inkscape::Selection * /*selection*/)
 {
-    schedule_plot_feedback_refresh(true);
+    request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::selection_changed);
 }
 
 void GrblControlPanel::selectionModified(Inkscape::Selection * /*selection*/, guint /*flags*/)
 {
-    schedule_plot_feedback_refresh(true);
+    request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::selection_changed);
 }
 
 void GrblControlPanel::update_page_restore_button()
@@ -960,9 +960,8 @@ GrblFirmwareSyncApplyResult GrblControlPanel::apply_firmware_snapshot_to_ui(Grbl
                 result.page_synced = page_sync.page_synced;
                 result.unit_synced = page_sync.unit_synced;
                 if (result.page_synced) {
-                    request_canvas_redraw();
                     update_page_restore_button();
-                    schedule_plot_feedback_refresh(true);
+                    request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::layout_changed);
                 }
             }
         }
@@ -1476,7 +1475,7 @@ void GrblControlPanel::handle_mapping_preferences_changed(bool const refresh_pre
     }
     update_mapping_control_sensitivity(plan.allow_interaction);
     if (plan.refresh_plot_feedback) {
-        refresh_plot_feedback(refresh_preview);
+        request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::mapping_preferences_changed, refresh_preview);
     }
 }
 
@@ -1636,6 +1635,17 @@ void GrblControlPanel::refresh_plot_feedback(bool const refresh_preview)
         }
         return false;
     }, *this), 120);
+}
+
+void GrblControlPanel::request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger const trigger,
+                                                         bool const refresh_preview)
+{
+    auto const plan = make_grbl_plot_feedback_trigger_plan(trigger, refresh_preview);
+    if (plan.refresh_immediately) {
+        refresh_plot_feedback(plan.refresh_preview);
+    } else {
+        schedule_plot_feedback_refresh(plan.refresh_preview);
+    }
 }
 
 bool GrblControlPanel::begin_gcode_stream_ui(GrblGcodeStartOrigin const origin)
@@ -2073,7 +2083,7 @@ void GrblControlPanel::on_fit_document_to_bed()
     }
     doc->getRoot()->translateChildItems(Geom::Translate(plan.translate_x, plan.translate_y));
     finalize_grbl_document_geometry_change(doc, GrblDocumentGeometryChange::fit_to_bed);
-    schedule_plot_feedback_refresh(true);
+    request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::layout_changed);
     post_status(build_grbl_fit_to_bed_status(plan.scale, plan.shrink_applied), false);
 }
 
@@ -2103,7 +2113,7 @@ void GrblControlPanel::on_center_document_to_bed()
 
     doc->getRoot()->translateChildItems(Geom::Translate(plan.translate_x, plan.translate_y));
     finalize_grbl_document_geometry_change(doc, GrblDocumentGeometryChange::center_to_bed);
-    schedule_plot_feedback_refresh(true);
+    request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::layout_changed);
 
     post_status(_("已将图稿整体居中到机器行程范围内。"), false);
 }
@@ -2131,11 +2141,10 @@ void GrblControlPanel::on_restore_page_size()
                                          _page_restore_state.saved_doc_height_px,
                                          _page_restore_state.saved_page_width_px,
                                          _page_restore_state.saved_page_height_px);
-    request_canvas_redraw();
     finalize_grbl_document_geometry_change(doc, GrblDocumentGeometryChange::restore_page);
     clear_grbl_page_restore_state(_page_restore_state);
     update_page_restore_button();
-    schedule_plot_feedback_refresh(true);
+    request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::layout_changed);
     post_status(_("已恢复同步前的页面尺寸。"), false);
 }
 
@@ -2335,7 +2344,7 @@ void GrblControlPanel::return_to_work_origin_after_cancel()
             }
         }
         if (work_origin.refresh_preview) {
-            schedule_plot_feedback_refresh(true);
+            request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::work_origin_changed);
         }
     }, false);
 }
@@ -2350,7 +2359,7 @@ void GrblControlPanel::execute_work_origin_action(GrblWorkOriginAction const act
             }
         }
         if (command.refresh_preview) {
-            schedule_plot_feedback_refresh(true);
+            request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::work_origin_changed);
         }
         if (!command.success_status.empty()) {
             post_status(command.success_status, false);
@@ -2918,7 +2927,7 @@ void GrblControlPanel::build_ui()
     _hatch_angle_increment_spin.set_increments(1.0, 10.0);
     _hatch_angle_increment_spin.set_tooltip_text(_("每处理一个闭合轮廓后，下一块排线角度额外增加的角度值。"));
     _pen_up_cmd_entry.set_placeholder_text(_("例如：G90 / G1 Z0 F1200"));
-    _pen_up_cmd_entry.set_tooltip_text(_("抬笔命令。Z 速度也在这里改，例如把 F3000 改成更慢或更快。"));
+    _pen_up_cmd_entry.set_tooltip_text(_("抬笔命令。带弹簧回零的 Z 机构通常建议回到 Z0，Z 速度也在这里改。"));
     _pen_down_cmd_entry.set_placeholder_text(_("例如：G90 / G1 Z5 F1200"));
     _pen_down_cmd_entry.set_tooltip_text(_("落笔命令。Z 高度和 Z 速度都在这里改。"));
     populate_bed_preset_combo();
@@ -3495,8 +3504,10 @@ void GrblControlPanel::build_ui()
             }
         });
     });
-    _chk_canvas_plot_preview.signal_toggled().connect([this] { schedule_plot_feedback_refresh(true); });
-    _chk_machine_space_preview.signal_toggled().connect([this] { schedule_plot_feedback_refresh(true); });
+    _chk_canvas_plot_preview.signal_toggled().connect(
+        [this] { request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::preview_visibility_changed); });
+    _chk_machine_space_preview.signal_toggled().connect(
+        [this] { request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::preview_visibility_changed); });
     _btn_fit_to_bed.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_fit_document_to_bed));
     _btn_center_to_bed.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_center_document_to_bed));
     _btn_restore_page_size.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_restore_page_size));
