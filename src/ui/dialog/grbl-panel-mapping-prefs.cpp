@@ -7,6 +7,7 @@
 namespace Inkscape::UI::Dialog {
 namespace {
 
+constexpr auto k_default_end_gcode = "G0 X0 Y0";
 constexpr auto k_pref_draw = "/options/grbl/feed-draw-mmmin";
 constexpr auto k_pref_travel = "/options/grbl/feed-travel-mmmin";
 constexpr auto k_pref_pen_up = "/options/grbl/pen-up-cmd";
@@ -41,11 +42,27 @@ constexpr auto k_pref_tool_change_x = "/options/grbl/tool-change-x-mm";
 constexpr auto k_pref_tool_change_y = "/options/grbl/tool-change-y-mm";
 constexpr auto k_pref_start_gcode = "/options/grbl/start-gcode";
 constexpr auto k_pref_end_gcode = "/options/grbl/end-gcode";
+constexpr auto k_pref_end_gcode_migration_v1 = "/options/grbl/migrations/end-gcode-default-v1";
+
+void migrate_end_gcode_default(Inkscape::Preferences &prefs)
+{
+    if (prefs.getEntry(k_pref_end_gcode_migration_v1).isSet()) {
+        return;
+    }
+
+    auto end_gcode = prefs.getString(k_pref_end_gcode);
+    if (end_gcode.find_first_not_of(" \t\r\n") == std::string::npos) {
+        prefs.setString(k_pref_end_gcode, k_default_end_gcode);
+    }
+    prefs.setBool(k_pref_end_gcode_migration_v1, true);
+    prefs.save();
+}
 
 } // namespace
 
 GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs)
 {
+    migrate_end_gcode_default(prefs);
     GrblPanelMappingPrefs values;
     values.sync_page_to_bed = prefs.getBool(k_pref_sync_page_to_bed, true);
     values.swap_xy = prefs.getBool(k_pref_swap_xy, false);
@@ -80,7 +97,7 @@ GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs
     values.tool_change_x = prefs.getDouble(k_pref_tool_change_x);
     values.tool_change_y = prefs.getDouble(k_pref_tool_change_y);
     values.start_gcode = prefs.getString(k_pref_start_gcode, "");
-    values.end_gcode = prefs.getString(k_pref_end_gcode, "");
+    values.end_gcode = prefs.getString(k_pref_end_gcode, k_default_end_gcode);
     return values;
 }
 

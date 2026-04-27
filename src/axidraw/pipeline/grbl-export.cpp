@@ -55,8 +55,11 @@ constexpr double k_mm_per_in = 25.4;
 constexpr double k_px_per_in = 96.0;
 constexpr double k_mm_per_px = k_mm_per_in / k_px_per_in;
 constexpr double k_machine_coord_epsilon_mm = 1e-3;
+constexpr auto k_default_end_gcode = "G0 X0 Y0";
 constexpr auto k_pref_clip_bed = "/options/grbl/clip-to-machine-bed";
 constexpr auto k_pref_clip_bed_migration_v1 = "/options/grbl/migrations/clip-to-machine-bed-default-v1";
+constexpr auto k_pref_end_gcode = "/options/grbl/end-gcode";
+constexpr auto k_pref_end_gcode_migration_v1 = "/options/grbl/migrations/end-gcode-default-v1";
 
 void migrate_clip_to_machine_bed_default(Inkscape::Preferences *prefs)
 {
@@ -66,6 +69,20 @@ void migrate_clip_to_machine_bed_default(Inkscape::Preferences *prefs)
 
     prefs->setBool(k_pref_clip_bed, true);
     prefs->setBool(k_pref_clip_bed_migration_v1, true);
+    prefs->save();
+}
+
+void migrate_end_gcode_default(Inkscape::Preferences *prefs)
+{
+    if (!prefs || prefs->getEntry(k_pref_end_gcode_migration_v1).isSet()) {
+        return;
+    }
+
+    auto end_gcode = prefs->getString(k_pref_end_gcode);
+    if (end_gcode.find_first_not_of(" \t\r\n") == std::string::npos) {
+        prefs->setString(k_pref_end_gcode, k_default_end_gcode);
+    }
+    prefs->setBool(k_pref_end_gcode_migration_v1, true);
     prefs->save();
 }
 
@@ -2634,6 +2651,7 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
         return;
     }
     migrate_clip_to_machine_bed_default(prefs);
+    migrate_end_gcode_default(prefs);
     constexpr auto k_flat = "/options/grbl/flatness";
     constexpr auto k_fd = "/options/grbl/feed-draw-mmmin";
     constexpr auto k_ft = "/options/grbl/feed-travel-mmmin";
@@ -2673,7 +2691,6 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     constexpr auto k_tool_change_y = "/options/grbl/tool-change-y-mm";
     constexpr auto k_layer_dwell = "/options/grbl/auto-layer-pause-dwell-sec";
     constexpr auto k_start_gcode = "/options/grbl/start-gcode";
-    constexpr auto k_end_gcode = "/options/grbl/end-gcode";
 
     params.flatness = prefs->getDoubleLimited(k_flat, 0.08, 0.001, 10.0);
     params.feed_draw_mm_min = prefs->getDoubleLimited(k_fd, 1200.0, 60.0, 12000.0);
@@ -2732,7 +2749,7 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     params.tool_change_y_mm = prefs->getDouble(k_tool_change_y);
     params.auto_layer_pause_dwell_sec = prefs->getDoubleLimited(k_layer_dwell, 0.0, 0.0, 600.0);
     params.start_gcode = prefs->getString(k_start_gcode, "");
-    params.end_gcode = prefs->getString(k_end_gcode, "");
+    params.end_gcode = prefs->getString(k_pref_end_gcode, k_default_end_gcode);
 }
 
 static bool collect_preview_doc_strokes(SPDocument *doc, GrblExportParams const &params, GrblExportContext const &ctx,

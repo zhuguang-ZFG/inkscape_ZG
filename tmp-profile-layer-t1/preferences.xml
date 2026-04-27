@@ -560,7 +560,8 @@
     </group>
   </group>
   <group
-     id="dialogs">
+     id="dialogs"
+     traceliveUpdate="1">
     <group
        id="toolbox" />
     <group
@@ -628,8 +629,9 @@
        path=""
        ask="1"
        ask_svg="1"
-       link="link"
-       scale="optimizeSpeed" />
+       link="embed"
+       scale="auto"
+       forcexdpi="0" />
     <group
        id="clonetiler"
        dotrace="0" />
@@ -1006,13 +1008,13 @@
        enable-long-pen-up="0"
        enable-near-connect="0"
        enable-sparse-stroke-sampling="0"
-       auto-pause-between-layers="0"
-       manual-pen-change="0"
-       pen-change-to-home="0"
-       pen-change-prompt="0"
-       enable-layer-tool-change-m6="1"
+       auto-pause-between-layers="1"
+       manual-pen-change="1"
+       pen-change-to-home="1"
+       pen-change-prompt="1"
+       enable-layer-tool-change-m6="0"
        tool-change-use-point="0"
-       feed-draw-mmmin="1220"
+       feed-draw-mmmin="6000"
        feed-travel-mmmin="6000"
        pen-up-delay-ms="0"
        pen-down-delay-ms="0"
@@ -1037,11 +1039,14 @@
      id="extensions"
      org.inkscape.output.png.inkscape.png_bitdepth="99"
      org.inkscape.output.png.inkscape.png_compression="6"
-     org.inkscape.output.png.inkscape.png_antialias="2" />
+     org.inkscape.output.png.inkscape.png_antialias="2"
+     org.inkscape.input.gdkpixbuf.jpg.link="embed"
+     org.inkscape.input.gdkpixbuf.jpg.dpi="from_file"
+     org.inkscape.input.gdkpixbuf.jpg.scale="auto" />
   <group
      id="desktop">
     <group
-       width="1272"
+       width="1276"
        height="1032"
        x="0"
        y="0"
