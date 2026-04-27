@@ -78,6 +78,94 @@ start-zg-dev-shell.cmd
   - travel length improved from about `7692.0 mm` to about `7656.1 mm`
   - hatch diagnostics remain stable: `175 / 175`, `inset-applied: 175`, `inset-fallback: 0`
 
+### Current local acceptance checks
+
+- Acceptance runs below used the current `inkscape\build-zg\bin\inkscape.com`.
+- To isolate stroke-order optimization itself, the test profiles used:
+  - `clip-to-machine-bed=0`
+  - `enable-near-connect=0`
+  - `enable-sparse-stroke-sampling=0`
+  - compare `optimize-stroke-order=1` vs `0`
+
+#### `tmp\tail.dxf`
+
+- optimize on:
+  - strokes: `175`
+  - draw/travel: `15391.3 / 2372.2 mm`
+  - estimated duration: `780.7 s`
+  - reported optimized travel: `17369.7 -> 2372.2 mm`
+- optimize off:
+  - strokes: `175`
+  - draw/travel: `15391.3 / 17369.7 mm`
+  - estimated duration: `930.6 s`
+
+#### `tmp\tail_from_dxf.svg`
+
+- optimize on:
+  - strokes: `175`
+  - draw/travel: `15391.3 / 2372.2 mm`
+  - estimated duration: `780.7 s`
+  - reported optimized travel: `17369.7 -> 2372.2 mm`
+- optimize off:
+  - strokes: `175`
+  - draw/travel: `15391.3 / 17369.7 mm`
+  - estimated duration: `930.6 s`
+
+#### `tmp\dxf_script_stdout.svg`
+
+- optimize on:
+  - strokes: `175`
+  - draw/travel: `15391.3 / 2372.2 mm`
+  - estimated duration: `780.7 s`
+  - reported optimized travel: `17369.7 -> 2372.2 mm`
+- optimize off:
+  - strokes: `175`
+  - draw/travel: `15391.3 / 17369.7 mm`
+  - estimated duration: `930.6 s`
+
+#### `near-connect` spot check on `tmp\tail_from_dxf.svg`
+
+- baseline (`near-connect=0`):
+  - strokes: `175`
+  - draw/travel: `15391.3 / 2372.2 mm`
+  - estimated duration: `780.7 s`
+- near-connect on (`near-connect-distance-mm=0.3`):
+  - strokes: `175`
+  - draw/travel: `15391.3 / 2260.1 mm`
+  - estimated duration: `779.5 s`
+- Interpretation:
+  - `near-connect` gives a small extra travel reduction on this sample.
+  - It is a geometry-changing strategy, not just pure reordering.
+
+#### `sparse` spot check on `tmp\tail_from_dxf.svg`
+
+- baseline (`sparse=0`):
+  - strokes: `175`
+  - draw/travel: `15391.3 / 2372.2 mm`
+  - estimated duration: `780.7 s`
+- sparse on (`sparse-keep-every=2`, `sparse-strategy=legacy`):
+  - strokes: `88`
+  - draw/travel: `8054.8 / 2017.2 mm`
+  - estimated duration: `416.3 s`
+- Interpretation:
+  - `sparse` is effective for speed, but it reduces actual drawn strokes.
+  - Treat it as a deliberate output-simplification mode, not as a pure path optimizer.
+
+#### Layered sample spot check: `tmp\plot-3layer-T1.svg`
+
+- optimize on:
+  - strokes: `7`
+  - draw/travel: `1044.8 / 195.3 mm`
+  - estimated duration: `53.3 s`
+  - reported optimized travel: `307.8 -> 195.3 mm`
+- optimize off:
+  - strokes: `7`
+  - draw/travel: `1044.8 / 307.8 mm`
+  - estimated duration: `54.5 s`
+- Interpretation:
+  - stroke-order optimization is still active and beneficial on this layered sample
+  - stroke count remains stable
+
 ### Useful debug environment variables
 
 - `INKSCAPE_GRBL_DEBUG_STAGES=1`

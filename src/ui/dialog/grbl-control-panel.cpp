@@ -173,6 +173,71 @@ std::string detect_radio_mode_from_reply(std::string reply)
     return {};
 }
 
+std::string extract_ipv4_from_reply(std::string const &reply)
+{
+    auto is_digit = [](char ch) {
+        return std::isdigit(static_cast<unsigned char>(ch)) != 0;
+    };
+    auto is_boundary = [](std::string const &text, std::size_t pos) {
+        if (pos >= text.size()) {
+            return true;
+        }
+        char const ch = text[pos];
+        return !(std::isalnum(static_cast<unsigned char>(ch)) || ch == '.' || ch == '_');
+    };
+
+    for (std::size_t start = 0; start < reply.size(); ++start) {
+        if (!is_digit(reply[start])) {
+            continue;
+        }
+        if (start > 0 && !is_boundary(reply, start - 1)) {
+            continue;
+        }
+
+        std::size_t pos = start;
+        std::string ip;
+        bool ok = true;
+        for (int part = 0; part < 4; ++part) {
+            if (pos >= reply.size() || !is_digit(reply[pos])) {
+                ok = false;
+                break;
+            }
+
+            int value = 0;
+            std::size_t digits = 0;
+            while (pos < reply.size() && is_digit(reply[pos]) && digits < 3) {
+                value = value * 10 + (reply[pos] - '0');
+                ++pos;
+                ++digits;
+            }
+            if (value > 255 || digits == 0) {
+                ok = false;
+                break;
+            }
+            if (pos < reply.size() && is_digit(reply[pos])) {
+                ok = false;
+                break;
+            }
+
+            ip += std::to_string(value);
+            if (part < 3) {
+                if (pos >= reply.size() || reply[pos] != '.') {
+                    ok = false;
+                    break;
+                }
+                ip.push_back('.');
+                ++pos;
+            }
+        }
+
+        if (ok && is_boundary(reply, pos)) {
+            return ip;
+        }
+    }
+
+    return {};
+}
+
 constexpr std::size_t k_max_gcode_stream_lines = 200000;
 
 constexpr std::size_t k_preview_max_strokes = 12000;
@@ -599,7 +664,8 @@ bool GrblControlPanel::launch_firmware_sync_worker()
     if (!begin_firmware_sync()) {
         return false;
     }
-    if (!start_short_worker([this](GrblPanelWorkers::StopFlag const &stop) {
+    auto const esp_admin_password = _radio_pwd.get_text();
+    if (!start_short_worker([this, esp_admin_password](GrblPanelWorkers::StopFlag const &stop) {
         GrblPanelFirmwareSyncContext context{
             .link = _link.get(),
             .with_locked_open_link = [this](std::atomic<bool> const &stop_flag, std::function<void()> work) {
@@ -618,9 +684,7 @@ bool GrblControlPanel::launch_firmware_sync_worker()
             .apply_snapshot_to_ui = [this](GrblFirmwareSnapshot const &snapshot) {
                 return apply_firmware_snapshot_to_ui(snapshot);
             },
-            .get_esp_admin_password = [this] {
-                return _radio_pwd.get_text();
-            },
+            .esp_admin_password = esp_admin_password,
             .set_firmware_info_text = [this](Glib::ustring const &text) { set_firmware_info_text(text); },
             .save_mapping_preferences = [this](bool refresh_preview) { save_mapping_preferences_from_ui(refresh_preview); },
             .schedule_plot_feedback_refresh = [this](bool refresh_preview) { schedule_plot_feedback_refresh(refresh_preview); },
@@ -770,6 +834,37 @@ GrblFirmwareSyncApplyResult GrblControlPanel::apply_firmware_snapshot_to_ui(Grbl
 
     auto const mapping_update = make_grbl_firmware_mapping_update(snapshot);
     GrblFirmwareSyncApplyResult result;
+    bool refresh_ports_needed = false;
+    if (snapshot.has_esp_ip || snapshot.has_esp_data_port) {
+        auto *prefs = Inkscape::Preferences::get();
+        auto cur_device = prefs->getString(k_pref_device);
+        auto net_host = prefs->getString(k_pref_net_host);
+        int net_port = prefs->getIntLimited(k_pref_net_port, 23, 1, 65535);
+        bool prefs_changed = false;
+
+        if (snapshot.has_esp_ip && net_host != snapshot.esp_ip) {
+            prefs->setString(k_pref_net_host, snapshot.esp_ip);
+            net_host = snapshot.esp_ip;
+            prefs_changed = true;
+        }
+        if (snapshot.has_esp_data_port && net_port != snapshot.esp_data_port) {
+            prefs->setInt(k_pref_net_port, snapshot.esp_data_port);
+            net_port = snapshot.esp_data_port;
+            prefs_changed = true;
+        }
+
+        if (prefs_changed) {
+            if (!net_host.empty() && cur_device.rfind("tcp://", 0) == 0) {
+                auto const tcp_spec = "tcp://" + net_host + ":" + std::to_string(net_port);
+                if (cur_device != tcp_spec) {
+                    prefs->setString(k_pref_device, tcp_spec);
+                }
+            }
+            prefs->save();
+            refresh_ports_needed = true;
+        }
+    }
+
     set_mapping_sync_suspended(true);
     if (mapping_update.has_invert_x) {
         result.changed = update_check_if_needed(_chk_invert_x, mapping_update.invert_x) || result.changed;
@@ -797,6 +892,10 @@ GrblFirmwareSyncApplyResult GrblControlPanel::apply_firmware_snapshot_to_ui(Grbl
                 schedule_plot_feedback_refresh(true);
             }
         }
+    }
+
+    if (refresh_ports_needed) {
+        refresh_port_list();
     }
 
     return result;
@@ -2933,8 +3032,9 @@ void GrblControlPanel::build_ui()
         }, false);
     });
     _btn_read_ip.signal_clicked().connect([this] {
-        run_action([this](std::string &e) {
-            std::string const pwd = _radio_pwd.get_text();
+        auto const pwd = _radio_pwd.get_text();
+        bool const connected = is_connect_active();
+        run_action([this, pwd, connected](std::string &e) {
             std::string cmd = "[ESP111]";
             if (!pwd.empty()) {
                 cmd += "pwd=" + pwd;
@@ -2968,12 +3068,17 @@ void GrblControlPanel::build_ui()
                 return;
             }
 
-            bool const connected = is_connect_active();
-            Glib::signal_idle().connect_once(sigc::track_object([this, reply, connected] {
+            auto const ip = extract_ipv4_from_reply(reply);
+            if (ip.empty()) {
+                e = _("已收到 IP 回复，但未能从中解析出有效 IPv4 地址。");
+                return;
+            }
+
+            Glib::signal_idle().connect_once(sigc::track_object([this, ip, connected] {
                 auto *prefs = Inkscape::Preferences::get();
                 int const net_port = prefs->getIntLimited(k_pref_net_port, 23, 1, 65535);
-                Glib::ustring const tcp_spec = "tcp://" + Glib::ustring(reply) + ":" + std::to_string(net_port);
-                prefs->setString(k_pref_net_host, reply);
+                Glib::ustring const tcp_spec = "tcp://" + Glib::ustring(ip) + ":" + std::to_string(net_port);
+                prefs->setString(k_pref_net_host, ip);
                 if (!connected) {
                     prefs->setString(k_pref_device, tcp_spec);
                 }
@@ -2982,19 +3087,16 @@ void GrblControlPanel::build_ui()
                 if (!connected) {
                     _port_combo.set_active_id(tcp_spec);
                 }
+                post_status(
+                    connected
+                        ? Glib::ustring::compose(
+                              _("当前控制器 IP：%1。已保存主机地址；断开后可切换为 TCP 连接。"),
+                              Glib::ustring(ip))
+                        : Glib::ustring::compose(
+                              _("当前控制器 IP：%1。已更新为下次 TCP 连接目标，并刷新端口列表。"),
+                              Glib::ustring(ip)),
+                    false);
             }, *this));
-
-            if (connected) {
-                post_status(Glib::ustring::compose(
-                                _("当前控制器 IP：%1。已保存主机地址；断开后可切换为 TCP 连接。"),
-                                Glib::ustring(reply)),
-                            false);
-            } else {
-                post_status(Glib::ustring::compose(
-                                _("当前控制器 IP：%1。已更新为下次 TCP 连接目标。"),
-                                Glib::ustring(reply)),
-                            false);
-            }
         }, false);
     });
     _btn_apply_radio_mode.signal_clicked().connect([this] {
