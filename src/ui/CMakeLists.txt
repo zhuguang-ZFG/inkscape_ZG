@@ -134,6 +134,7 @@ target_sources(inkscape_base PRIVATE
 	dialog/grbl-pen-command.cpp
 	dialog/grbl-work-origin.cpp
 	dialog/grbl-panel-export-session.cpp
+	dialog/grbl-panel-feedback-scope-state.cpp
 	dialog/grbl-panel-feedback-state.cpp
 	dialog/grbl-panel-feedback-trigger-state.cpp
 	dialog/grbl-panel-feedback-presentation.cpp
@@ -385,6 +386,7 @@ target_sources(inkscape_base PRIVATE
 	dialog/grbl-panel-connection-state.h
 	dialog/grbl-panel-document-geometry.h
 	dialog/grbl-panel-document-layout.h
+	dialog/grbl-panel-feedback-scope-state.h
 	dialog/grbl-panel-feedback-state.h
 	dialog/grbl-panel-feedback-trigger-state.h
 	dialog/grbl-panel-feedback-presentation.h

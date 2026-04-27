@@ -315,6 +315,8 @@ add_unit_test(grbl-panel-export-session-test TEST_SOURCE "grbl-panel-export-sess
                                   EXTRA_LIBS GLibmm::GLibmm 2Geom::2geom)
 add_unit_test(grbl-panel-feedback-state-test TEST_SOURCE "grbl-panel-feedback-state-test.cpp"
                                              SOURCES "ui/dialog/grbl-panel-feedback-state.cpp")
+add_unit_test(grbl-panel-feedback-scope-state-test TEST_SOURCE "grbl-panel-feedback-scope-state-test.cpp"
+                                                   SOURCES "ui/dialog/grbl-panel-feedback-scope-state.cpp")
 add_unit_test(grbl-panel-feedback-trigger-state-test TEST_SOURCE "grbl-panel-feedback-trigger-state-test.cpp"
                                                      SOURCES "ui/dialog/grbl-panel-feedback-trigger-state.cpp")
 add_unit_test(grbl-panel-feedback-presentation-test TEST_SOURCE "grbl-panel-feedback-presentation-test.cpp"
