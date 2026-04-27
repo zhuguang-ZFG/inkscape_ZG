@@ -503,7 +503,8 @@ void GrblControlPanel::on_unmap()
 {
     clear_plot_preview_overlay();
     _plot_feedback_refresh_timer.disconnect();
-    _plot_feedback_refresh_preview_requested = false;
+    _plot_feedback_refresh_summaries_requested = false;
+    _plot_feedback_refresh_overlay_requested = false;
     _plot_feedback_refresh_dispatch_pending = false;
     ensure_machine_status_poll(false);
     DialogBase::on_unmap();
@@ -1593,10 +1594,17 @@ bool GrblControlPanel::has_plot_preview_enabled() const
 
 void GrblControlPanel::schedule_plot_feedback_refresh(bool const refresh_preview)
 {
+    schedule_plot_feedback_refresh(make_grbl_plot_feedback_channels(true, refresh_preview));
+}
+
+void GrblControlPanel::schedule_plot_feedback_refresh(GrblPlotFeedbackChannels const &channels)
+{
     auto const plan = make_grbl_plot_feedback_schedule_plan(
-        _plot_feedback_refresh_preview_requested, is_plot_feedback_blocked(), refresh_preview,
+        _plot_feedback_refresh_summaries_requested, _plot_feedback_refresh_overlay_requested,
+        is_plot_feedback_blocked(), channels.refresh_summaries, channels.refresh_overlay,
         _plot_feedback_refresh_dispatch_pending, _plot_feedback_refresh_timer.connected());
-    _plot_feedback_refresh_preview_requested = plan.preview_requested;
+    _plot_feedback_refresh_summaries_requested = plan.refresh_summaries_requested;
+    _plot_feedback_refresh_overlay_requested = plan.refresh_overlay_requested;
     if (!plan.clear_preview_overlay && !plan.queue_idle_refresh) {
         return;
     }
@@ -1607,25 +1615,34 @@ void GrblControlPanel::schedule_plot_feedback_refresh(bool const refresh_preview
         return;
     }
     _plot_feedback_refresh_dispatch_pending = true;
-    Glib::signal_idle().connect_once(sigc::track_object([this, refresh_preview] {
+    Glib::signal_idle().connect_once(sigc::track_object([this, channels] {
         _plot_feedback_refresh_dispatch_pending = false;
-        refresh_plot_feedback(refresh_preview);
+        refresh_plot_feedback(channels);
     }, *this));
 }
 
 void GrblControlPanel::refresh_plot_feedback(bool const refresh_preview)
 {
+    refresh_plot_feedback(make_grbl_plot_feedback_channels(true, refresh_preview));
+}
+
+void GrblControlPanel::refresh_plot_feedback(GrblPlotFeedbackChannels const &channels)
+{
     auto const plan = make_grbl_plot_feedback_refresh_plan(
-        _plot_feedback_refresh_preview_requested, is_plot_feedback_blocked(), refresh_preview,
+        _plot_feedback_refresh_summaries_requested, _plot_feedback_refresh_overlay_requested,
+        is_plot_feedback_blocked(), channels.refresh_summaries, channels.refresh_overlay,
         _plot_feedback_refresh_timer.connected());
-    _plot_feedback_refresh_preview_requested = plan.preview_requested;
+    _plot_feedback_refresh_summaries_requested = plan.refresh_summaries_requested;
+    _plot_feedback_refresh_overlay_requested = plan.refresh_overlay_requested;
     if (!plan.start_timer) {
         return;
     }
     _plot_feedback_refresh_timer = Glib::signal_timeout().connect(sigc::track_object([this] {
-        auto const timer_plan = make_grbl_plot_feedback_timer_plan(_plot_feedback_refresh_preview_requested,
+        auto const timer_plan = make_grbl_plot_feedback_timer_plan(_plot_feedback_refresh_summaries_requested,
+                                                                   _plot_feedback_refresh_overlay_requested,
                                                                    has_plot_preview_enabled());
-        _plot_feedback_refresh_preview_requested = timer_plan.preview_requested;
+        _plot_feedback_refresh_summaries_requested = timer_plan.refresh_summaries_requested;
+        _plot_feedback_refresh_overlay_requested = timer_plan.refresh_overlay_requested;
         _plot_feedback_refresh_timer.disconnect();
         if (timer_plan.refresh_summaries) {
             refresh_plot_summaries();
@@ -1642,9 +1659,9 @@ void GrblControlPanel::request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger
 {
     auto const plan = make_grbl_plot_feedback_trigger_plan(trigger, refresh_preview);
     if (plan.refresh_immediately) {
-        refresh_plot_feedback(plan.refresh_preview);
+        refresh_plot_feedback(plan.channels);
     } else {
-        schedule_plot_feedback_refresh(plan.refresh_preview);
+        schedule_plot_feedback_refresh(plan.channels);
     }
 }
 

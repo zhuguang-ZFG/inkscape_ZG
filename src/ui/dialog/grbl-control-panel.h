@@ -207,7 +207,9 @@ private:
     void build_machine_axis_overlay(SPDesktop *desktop, Inkscape::Axidraw::GrblExportParams const &params,
                                     Geom::Affine const &affine);
     void schedule_plot_feedback_refresh(bool refresh_preview = true);
+    void schedule_plot_feedback_refresh(GrblPlotFeedbackChannels const &channels);
     void refresh_plot_feedback(bool refresh_preview = true);
+    void refresh_plot_feedback(GrblPlotFeedbackChannels const &channels);
     void request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger trigger, bool refresh_preview = true);
     bool begin_gcode_stream_ui(GrblGcodeStartOrigin origin);
     void post_gcode_stream_result(std::string const &err);
@@ -235,7 +237,8 @@ private:
     sigc::connection _document_modified;
     bool _suspend_port_combo{false};
     bool _suspend_mapping_sync{false};
-    bool _plot_feedback_refresh_preview_requested{false};
+    bool _plot_feedback_refresh_summaries_requested{false};
+    bool _plot_feedback_refresh_overlay_requested{false};
     bool _plot_feedback_refresh_dispatch_pending{false};
     bool _cancel_return_to_origin_pending{false};
     bool _suspend_editor_gcode_tracking{false};

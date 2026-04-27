@@ -14,10 +14,10 @@ GrblPlotFeedbackTriggerPlan make_grbl_plot_feedback_trigger_plan(GrblPlotFeedbac
         case GrblPlotFeedbackTrigger::preview_visibility_changed:
         case GrblPlotFeedbackTrigger::layout_changed:
         case GrblPlotFeedbackTrigger::work_origin_changed:
-            plan.refresh_preview = true;
+            plan.channels = make_grbl_plot_feedback_channels(true, true);
             break;
         case GrblPlotFeedbackTrigger::mapping_preferences_changed:
-            plan.refresh_preview = refresh_preview;
+            plan.channels = make_grbl_plot_feedback_channels(true, refresh_preview);
             plan.refresh_immediately = true;
             break;
     }

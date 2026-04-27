@@ -5,6 +5,8 @@
 #ifndef INKSCAPE_UI_DIALOG_GRBL_PANEL_FEEDBACK_TRIGGER_STATE_H
 #define INKSCAPE_UI_DIALOG_GRBL_PANEL_FEEDBACK_TRIGGER_STATE_H
 
+#include "ui/dialog/grbl-panel-feedback-scope-state.h"
+
 namespace Inkscape::UI::Dialog {
 
 enum class GrblPlotFeedbackTrigger {
@@ -18,7 +20,7 @@ enum class GrblPlotFeedbackTrigger {
 
 struct GrblPlotFeedbackTriggerPlan
 {
-    bool refresh_preview = false;
+    GrblPlotFeedbackChannels channels;
     bool refresh_immediately = false;
 };
 
