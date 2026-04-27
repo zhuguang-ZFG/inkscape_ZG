@@ -13,7 +13,7 @@ from lxml import etree, isoschematron
 from ..utils import PY3
 from ..inx import InxFile
 
-INTERNAL_ARGS = ("help", "output", "id", "selected-nodes")
+INTERNAL_ARGS = ("help", "output", "id", "selected-nodes", "arg-file")
 ARG_TYPES = {
     "Boolean": "bool",
     "Color": "color",
