@@ -73,6 +73,7 @@
 #include "ui/dialog/grbl-panel-mapping-state.h"
 #include "ui/dialog/grbl-pen-command.h"
 #include "ui/dialog/grbl-panel-summary-presentation.h"
+#include "ui/dialog/grbl-work-origin.h"
 #include "ui/dialog/grbl-runtime-state.h"
 #include "ui/dialog/grbl-panel-firmware-sync.h"
 #include "ui/dialog/grbl-panel-workers.h"
@@ -2327,10 +2328,34 @@ void GrblControlPanel::return_to_work_origin_after_cancel()
                 return;
             }
         }
-        if (!send_link_lines(*_link, {"G21", "G90", "G0 X0 Y0"}, e)) {
-            return;
+        auto const work_origin = build_grbl_work_origin_command(GrblWorkOriginAction::return_after_cancel);
+        for (auto const &line : work_origin.lines) {
+            if (!_link->send_line_wait_ok(line, e)) {
+                return;
+            }
+        }
+        if (work_origin.refresh_preview) {
+            schedule_plot_feedback_refresh(true);
         }
     }, false);
+}
+
+void GrblControlPanel::execute_work_origin_action(GrblWorkOriginAction const action)
+{
+    run_action([this, action](std::string &e) {
+        auto const command = build_grbl_work_origin_command(action);
+        for (auto const &line : command.lines) {
+            if (!_link->send_line_wait_ok(line, e)) {
+                return;
+            }
+        }
+        if (command.refresh_preview) {
+            schedule_plot_feedback_refresh(true);
+        }
+        if (!command.success_status.empty()) {
+            post_status(command.success_status, false);
+        }
+    });
 }
 
 void GrblControlPanel::clear_plot_preview_overlay()
@@ -3450,25 +3475,9 @@ void GrblControlPanel::build_ui()
     _btn_ym.signal_clicked().connect([this] { jog_y(-1.0); });
     _btn_xp.signal_clicked().connect([this] { jog_x(+1.0); });
     _btn_xm.signal_clicked().connect([this] { jog_x(-1.0); });
-    _btn_set_origin.signal_clicked().connect([this] {
-        run_action([this](std::string &e) {
-            if (!send_link_lines(*_link, {"G21", "G92 X0 Y0"}, e)) {
-                return;
-            }
-            schedule_plot_feedback_refresh(true);
-            post_status(_("已将当前位置设为工作零点（X0 Y0，未改 Z）。"), false);
-        });
-    });
-    _btn_goto_work_zero.signal_clicked().connect([this] {
-        run_action(
-            [this](std::string &e) {
-                if (!send_link_lines(*_link, {"G21", "G90", "G0 X0 Y0"}, e)) {
-                    return;
-                }
-                schedule_plot_feedback_refresh(true);
-                post_status(_("已移动到工作 XY 零点。"), false);
-            });
-    });
+    _btn_set_origin.signal_clicked().connect([this] { execute_work_origin_action(GrblWorkOriginAction::set_origin_xy); });
+    _btn_goto_work_zero.signal_clicked().connect(
+        [this] { execute_work_origin_action(GrblWorkOriginAction::goto_work_zero_xy); });
     _btn_reset.signal_clicked().connect([this] { soft_reset(); });
     _btn_pen_up.signal_clicked().connect([this] { send_pen_state(true); });
     _btn_pen_down.signal_clicked().connect([this] { send_pen_state(false); });

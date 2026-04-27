@@ -132,6 +132,7 @@ target_sources(inkscape_base PRIVATE
 	dialog/grbl-editor-gcode.cpp
 	dialog/grbl-editor-generation-state.cpp
 	dialog/grbl-pen-command.cpp
+	dialog/grbl-work-origin.cpp
 	dialog/grbl-panel-export-session.cpp
 	dialog/grbl-panel-feedback-state.cpp
 	dialog/grbl-panel-feedback-presentation.cpp
