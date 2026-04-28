@@ -13,6 +13,8 @@ For user-facing documentation, please refer to the [Inkscape website](https://in
 - [Developing Inkscape with Visual Studio Code on Windows](./vscode/readme.md)
 - Native GRBL / AxiDraw integration lives in `src/axidraw/`, with UI in `src/ui/dialog/grbl-control-panel.*`
   and related preferences under Input/Output.
+- [GRBL / AxiDraw developer overview (ZH)](./grbl-developer-overview.md) — module map, entry points, and data flow.
+- [GRBL preferences reference (ZH)](./grbl-preferences-reference.md) — `/options/grbl/*` to `GrblExportParams` mapping.
 
 
 

@@ -79,3 +79,54 @@ TEST(GrblPanelJobGuardTest, DirectSendManualChangePromptRequiresParentWindow)
     auto const reason = get_grbl_direct_send_block_reason(input);
     EXPECT_FALSE(reason.empty());
 }
+
+TEST(GrblPanelJobGuardTest, DirectSendConnectionErrorTakesPrecedenceOverParentWindowRequirement)
+{
+    GrblDirectSendGuardInput input;
+    input.connection_state = GrblDirectSendConnectionState::tcp_connected;
+    input.requires_parent_window = true;
+    input.has_parent_window = false;
+
+    auto const tcp_reason = get_grbl_direct_send_block_reason(input);
+    EXPECT_FALSE(tcp_reason.empty());
+
+    input.connection_state = GrblDirectSendConnectionState::ready_serial;
+    auto const parent_reason = get_grbl_direct_send_block_reason(input);
+    EXPECT_FALSE(parent_reason.empty());
+    EXPECT_NE(tcp_reason.raw(), parent_reason.raw());
+}
+
+TEST(GrblPanelJobGuardTest, EditorSendStaleMappingTakesPrecedenceOverBedBoundsCheck)
+{
+    GrblEditorSendGuardInput input;
+    input.has_executable_content = true;
+    input.stale_generated_gcode = true;
+    input.check_bed_bounds = true;
+    input.bounds.saw_xy_motion = true;
+    input.bounds.min_x_mm = -10.0;
+    input.bounds.max_x_mm = 50.0;
+    input.bounds.min_y_mm = -10.0;
+    input.bounds.max_y_mm = 50.0;
+    input.bed_width_mm = 10.0;
+    input.bed_height_mm = 10.0;
+
+    auto const reason = get_grbl_editor_send_block_reason(input);
+    EXPECT_EQ(reason.raw(), build_editor_gcode_stale_mapping_message().raw());
+}
+
+TEST(GrblPanelJobGuardTest, EditorSendBedBoundsClampToAtLeastOneMillimeter)
+{
+    GrblEditorSendGuardInput input;
+    input.has_executable_content = true;
+    input.check_bed_bounds = true;
+    input.bounds.saw_xy_motion = true;
+    input.bounds.min_x_mm = 0.0;
+    input.bounds.max_x_mm = 1.5;
+    input.bounds.min_y_mm = 0.0;
+    input.bounds.max_y_mm = 0.5;
+    input.bed_width_mm = 0.0;
+    input.bed_height_mm = -20.0;
+
+    auto const reason = get_grbl_editor_send_block_reason(input);
+    EXPECT_EQ(reason.raw(), build_editor_gcode_out_of_bed_message(input.bounds, 1.0, 1.0).raw());
+}

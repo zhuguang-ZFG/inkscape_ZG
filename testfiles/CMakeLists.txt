@@ -254,11 +254,27 @@ add_unit_test(treeify-test TEST_SOURCE "treeify-test.cpp"
                                SOURCES "util/treeify.cpp")
 add_unit_test(grbl-client-test TEST_SOURCE "grbl-client-test.cpp"
                                SOURCES "axidraw/device/grbl-client.cpp"
+                                       "axidraw/device/grbl-link.cpp"
                                        "axidraw/device/serial-port.cpp"
                                        "axidraw/device/tcp-port.cpp"
                             EXTRA_LIBS GLibmm::GLibmm)
 if(WIN32)
     target_link_libraries(grbl-client-test ws2_32)
+endif()
+add_unit_test(grbl-link-test TEST_SOURCE "grbl-link-test.cpp"
+                             SOURCES "axidraw/device/grbl-client.cpp"
+                                     "axidraw/device/grbl-link.cpp"
+                                     "axidraw/device/serial-port.cpp"
+                                     "axidraw/device/tcp-port.cpp"
+                          EXTRA_LIBS GLibmm::GLibmm)
+if(WIN32)
+    target_link_libraries(grbl-link-test ws2_32)
+endif()
+add_unit_test(plot-orchestrator-messages-test TEST_SOURCE "plot-orchestrator-messages-test.cpp"
+                                            SOURCES "axidraw/core/plot-orchestrator-messages.cpp"
+                                                    "axidraw/device/grbl-client.cpp")
+if(WIN32)
+    target_link_libraries(plot-orchestrator-messages-test ws2_32)
 endif()
 add_unit_test(tcp-port-readline-test TEST_SOURCE "tcp-port-readline-test.cpp"
                                       SOURCES "axidraw/device/tcp-port.cpp")
