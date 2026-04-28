@@ -47,6 +47,11 @@ SerialPort *GrblLink::serial_port() const noexcept
     return _serial.get();
 }
 
+TcpPort *GrblLink::tcp_port() const noexcept
+{
+    return _tcp.get();
+}
+
 GrblLink::Activity GrblLink::activity() const noexcept
 {
     std::lock_guard const lock(_activity_mutex);

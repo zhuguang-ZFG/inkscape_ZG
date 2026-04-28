@@ -2747,12 +2747,29 @@ void InkscapePreferences::initPageIO()
         _("After converting the document to millimetres, replace Y with (page height in mm − Y). Useful when the machine’s "
           "+Y direction matches the upward direction on your canvas."),
         true, reset_icon());
-    _grbl_align_origin.init(
-        _("Shift plot so lower-_left of bounds is at machine X0 Y0"), "/options/grbl/align-content-min", false);
+    {
+        std::vector<Glib::ustring> labels = {
+            _("No adjustment"),
+            _("Lower-left"),
+            _("Lower-right"),
+            _("Upper-left"),
+            _("Upper-right"),
+            _("Center"),
+        };
+        std::vector<Glib::ustring> values = {
+            "none",
+            "lower_left",
+            "lower_right",
+            "upper_left",
+            "upper_right",
+            "center",
+        };
+        _grbl_plot_anchor.init("/options/grbl/plot-anchor-position", labels, values, "none");
+    }
     _page_grbl.add_line(
-        false, "", _grbl_align_origin, "",
-        _("Subtracts the minimum X and Y of all exported points (in machine millimetres after optional mirroring) so the "
-          "bounding box corner sits at the origin—handy when homing the pen to the front-left corner."),
+        false, _("Plot _anchor:"), _grbl_plot_anchor, "",
+        _("Translates the exported plot within the machine bed after document-to-mm conversion and optional mirroring so "
+          "the drawing lands at the selected lower/upper corner or the center."),
         true, reset_icon());
     _grbl_clip_bed.init(_("Clip segments to machine _bed size"), "/options/grbl/clip-to-machine-bed", true);
     _page_grbl.add_line(

@@ -404,7 +404,7 @@ TEST_F(GrblExportTest, AlignsContentToMachineOrigin)
     ASSERT_TRUE(doc);
 
     Inkscape::Axidraw::GrblExportParams params;
-    params.align_content_min_to_origin = true;
+    params.plot_anchor = Inkscape::Axidraw::GrblPlotAnchorPosition::LowerLeft;
 
     Inkscape::Axidraw::GrblExportContext ctx;
     auto const gcode = build_gcode(doc.get(), params, ctx);
@@ -535,7 +535,7 @@ TEST_F(GrblExportTest, MachinePreviewReflectsMappedCoordinates)
 
     Inkscape::Axidraw::GrblExportParams params;
     params.flip_y_canvas = true;
-    params.align_content_min_to_origin = true;
+    params.plot_anchor = Inkscape::Axidraw::GrblPlotAnchorPosition::LowerLeft;
 
     Inkscape::Axidraw::GrblExportContext ctx;
     Geom::PathVector preview;

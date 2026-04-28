@@ -133,6 +133,11 @@ StartScreen::StartScreen()
     , close_btn{get_widget<Gtk::Button>(build_splash, "close_window")}
     , messages{get_widget<Gtk::Label>(build_splash, "messages")}
 {
+    signal_close_request().connect([this] {
+        delete this;
+        return true;
+    }, false); // before GTK's default handler, so the toplevel self-destructs on close
+
     set_name("start-screen-window");
     set_title(Inkscape::inkscape_version());
     set_focusable(true);

@@ -30,8 +30,7 @@ namespace {
 constexpr int k_gcode_send_progress_min_interval_ms = 350;
 constexpr std::size_t k_gcode_send_progress_line_stride = 80;
 constexpr std::size_t k_max_gcode_stream_lines = 200000;
-constexpr auto k_motor_disable_gcode = "MD";
-
+constexpr auto k_motor_disable_gcode = "$MD";
 void prepare_stream_link(Inkscape::Axidraw::GrblLink *link)
 {
     if (!(link && link->is_open())) {
@@ -94,6 +93,23 @@ Glib::ustring make_direct_send_done_status(std::size_t strokes, Inkscape::Axidra
     return Glib::ustring::compose(_("Direct send completed: %1 strokes sent."), static_cast<guint64>(strokes));
 }
 
+bool send_motor_disable_if_possible(Inkscape::Axidraw::GrblLink *link, std::string &err)
+{
+    if (!(link && link->is_open())) {
+        return false;
+    }
+    if (auto *serial = link->serial_port()) {
+        if (!Inkscape::Axidraw::grbl_wait_until_idle(*serial, err)) {
+            return false;
+        }
+    } else if (auto *tcp = link->tcp_port()) {
+        if (!Inkscape::Axidraw::grbl_wait_until_idle(*tcp, err)) {
+            return false;
+        }
+    }
+    return link->send_line_wait_ok(k_motor_disable_gcode, err);
+}
+
 struct GcodeSendProgressTracker {
     using clock = std::chrono::steady_clock;
 
@@ -145,15 +161,6 @@ void post_gcode_send_completion(std::function<void(Glib::ustring const &, bool)>
     } else {
         post_status(Glib::ustring::compose(_("Sent %1 lines of G-code."), static_cast<guint64>(sent)), false);
     }
-}
-
-bool send_motor_disable_if_possible(Inkscape::Axidraw::GrblLink *link, std::string &err_out)
-{
-    if (!(link && link->is_open())) {
-        err_out = _("Serial port is disconnected.");
-        return false;
-    }
-    return link->send_line_wait_ok(k_motor_disable_gcode, err_out);
 }
 
 Inkscape::Axidraw::GrblExportContext make_direct_send_context(SPDesktop *desktop, Inkscape::Selection *selection,
@@ -274,24 +281,17 @@ void GrblPanelSender::run_direct_send_worker(GrblPanelSenderContext const &conte
         std::size_t strokes = 0;
         Inkscape::Axidraw::GrblPlotStats stats{};
         if (!Inkscape::Axidraw::export_paths_to_grbl(*serial, doc, params, ctx, err, &strokes, &stats)) {
-            if (err != Inkscape::Axidraw::grbl_error_user_cancelled() &&
-                !(context.should_defer_motor_disable_cleanup && context.should_defer_motor_disable_cleanup())) {
-                std::string cleanup_err;
-                send_motor_disable_if_possible(context.link, cleanup_err);
-            }
+            context.post_gcode_stream_result(err);
+            return;
+        }
+        if (!send_motor_disable_if_possible(context.link, err)) {
             context.post_gcode_stream_result(err);
             return;
         }
 
-        std::string cleanup_err;
-        if (!send_motor_disable_if_possible(context.link, cleanup_err)) {
-            context.post_gcode_stream_result(cleanup_err);
-            return;
-        }
-
-        context.refresh_plot_feedback_after_gcode_change();
-        context.post_status(make_direct_send_done_status(strokes, stats), false);
-    });
+          context.refresh_plot_feedback_after_gcode_change();
+          context.post_status(make_direct_send_done_status(strokes, stats), false);
+      });
     finish();
 }
 
@@ -342,30 +342,19 @@ void GrblPanelSender::run_editor_gcode_send_worker(GrblPanelSenderContext const 
         });
 
         if (write_failed) {
-            if (err != Inkscape::Axidraw::grbl_error_user_cancelled() &&
-                !(context.should_defer_motor_disable_cleanup && context.should_defer_motor_disable_cleanup())) {
-                std::string cleanup_err;
-                send_motor_disable_if_possible(link, cleanup_err);
-            }
             context.post_gcode_stream_result(err);
             return;
         }
-        if (!err.empty()) {
-            if (err != Inkscape::Axidraw::grbl_error_user_cancelled() &&
-                !(context.should_defer_motor_disable_cleanup && context.should_defer_motor_disable_cleanup())) {
-                std::string cleanup_err;
-                send_motor_disable_if_possible(link, cleanup_err);
-            }
-            context.post_gcode_stream_result(err);
-        } else {
-            std::string cleanup_err;
-            if (!send_motor_disable_if_possible(link, cleanup_err)) {
-                context.post_gcode_stream_result(cleanup_err);
-                return;
-            }
-            post_gcode_send_completion(context.post_status, send_from_cursor, editor_line_1, sent);
-        }
-    });
+          if (!err.empty()) {
+              context.post_gcode_stream_result(err);
+          } else {
+              if (!send_motor_disable_if_possible(link, err)) {
+                  context.post_gcode_stream_result(err);
+                  return;
+              }
+              post_gcode_send_completion(context.post_status, send_from_cursor, editor_line_1, sent);
+          }
+      });
     finish();
 }
 

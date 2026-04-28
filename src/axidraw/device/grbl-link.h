@@ -34,6 +34,7 @@ public:
     [[nodiscard]] Kind kind() const noexcept;
     [[nodiscard]] bool is_open() const;
     [[nodiscard]] SerialPort *serial_port() const noexcept;
+    [[nodiscard]] TcpPort *tcp_port() const noexcept;
     [[nodiscard]] Activity activity() const noexcept;
 
     void set_activity(Activity activity) noexcept;

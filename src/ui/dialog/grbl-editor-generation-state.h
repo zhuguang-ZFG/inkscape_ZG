@@ -17,7 +17,7 @@ struct EditorGcodeGenerationState
     bool invert_x = false;
     bool invert_y = false;
     bool flip_y_canvas = false;
-    bool align_content_min_to_origin = false;
+    Glib::ustring plot_anchor;
     double machine_bed_width_mm = 0.0;
     double machine_bed_depth_mm = 0.0;
 };
@@ -29,18 +29,18 @@ struct EditorGcodeGenerationInputs
     bool invert_x = false;
     bool invert_y = false;
     bool flip_y_canvas = false;
-    bool align_content_min_to_origin = false;
+    Glib::ustring plot_anchor;
     double machine_bed_width_mm = 0.0;
     double machine_bed_depth_mm = 0.0;
 };
 
 EditorGcodeGenerationState make_editor_gcode_generation_state(bool clip_to_machine_bed, bool swap_xy, bool invert_x,
                                                               bool invert_y, bool flip_y_canvas,
-                                                              bool align_content_min_to_origin, double bed_width_mm,
+                                                              Glib::ustring const &plot_anchor, double bed_width_mm,
                                                               double bed_depth_mm);
 EditorGcodeGenerationInputs make_editor_gcode_generation_inputs(bool clip_to_machine_bed, bool swap_xy, bool invert_x,
                                                                 bool invert_y, bool flip_y_canvas,
-                                                                bool align_content_min_to_origin, double bed_width_mm,
+                                                                Glib::ustring const &plot_anchor, double bed_width_mm,
                                                                 double bed_depth_mm);
 bool editor_gcode_generation_state_matches(EditorGcodeGenerationState const &state,
                                            EditorGcodeGenerationInputs const &inputs);

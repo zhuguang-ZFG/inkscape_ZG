@@ -11,7 +11,7 @@ namespace Inkscape::UI::Dialog {
 EditorGcodeGenerationState make_editor_gcode_generation_state(bool const clip_to_machine_bed, bool const swap_xy,
                                                               bool const invert_x, bool const invert_y,
                                                               bool const flip_y_canvas,
-                                                              bool const align_content_min_to_origin,
+                                                              Glib::ustring const &plot_anchor,
                                                               double const bed_width_mm,
                                                               double const bed_depth_mm)
 {
@@ -22,7 +22,7 @@ EditorGcodeGenerationState make_editor_gcode_generation_state(bool const clip_to
     state.invert_x = invert_x;
     state.invert_y = invert_y;
     state.flip_y_canvas = flip_y_canvas;
-    state.align_content_min_to_origin = align_content_min_to_origin;
+    state.plot_anchor = plot_anchor;
     state.machine_bed_width_mm = bed_width_mm;
     state.machine_bed_depth_mm = bed_depth_mm;
     return state;
@@ -31,7 +31,7 @@ EditorGcodeGenerationState make_editor_gcode_generation_state(bool const clip_to
 EditorGcodeGenerationInputs make_editor_gcode_generation_inputs(bool const clip_to_machine_bed, bool const swap_xy,
                                                                 bool const invert_x, bool const invert_y,
                                                                 bool const flip_y_canvas,
-                                                                bool const align_content_min_to_origin,
+                                                                Glib::ustring const &plot_anchor,
                                                                 double const bed_width_mm,
                                                                 double const bed_depth_mm)
 {
@@ -41,7 +41,7 @@ EditorGcodeGenerationInputs make_editor_gcode_generation_inputs(bool const clip_
     inputs.invert_x = invert_x;
     inputs.invert_y = invert_y;
     inputs.flip_y_canvas = flip_y_canvas;
-    inputs.align_content_min_to_origin = align_content_min_to_origin;
+    inputs.plot_anchor = plot_anchor;
     inputs.machine_bed_width_mm = bed_width_mm;
     inputs.machine_bed_depth_mm = bed_depth_mm;
     return inputs;
@@ -59,7 +59,7 @@ bool editor_gcode_generation_state_matches(EditorGcodeGenerationState const &sta
            state.invert_x == inputs.invert_x &&
            state.invert_y == inputs.invert_y &&
            state.flip_y_canvas == inputs.flip_y_canvas &&
-           state.align_content_min_to_origin == inputs.align_content_min_to_origin &&
+           state.plot_anchor == inputs.plot_anchor &&
            nearly_equal_mm(state.machine_bed_width_mm, inputs.machine_bed_width_mm) &&
            nearly_equal_mm(state.machine_bed_depth_mm, inputs.machine_bed_depth_mm);
 }

@@ -522,7 +522,7 @@ protected:
     UI::Widget::PrefCheckButton   _grbl_hatch_angle_increment_enable;
     UI::Widget::PrefSpinButton    _grbl_hatch_angle_increment;
     UI::Widget::PrefCheckButton   _grbl_flip_y_canvas;
-    UI::Widget::PrefCheckButton   _grbl_align_origin;
+    UI::Widget::PrefCombo         _grbl_plot_anchor;
     UI::Widget::PrefCheckButton   _grbl_clip_bed;
     UI::Widget::PrefCombo         _grbl_bed_preset;
     UI::Widget::PrefSpinButton    _grbl_bed_width;

@@ -289,7 +289,7 @@ private:
     Gtk::CheckButton _chk_invert_x;
     Gtk::CheckButton _chk_invert_y;
     Gtk::CheckButton _chk_flip_y;
-    Gtk::CheckButton _chk_align_origin;
+    Gtk::ComboBoxText _plot_anchor_combo;
     Gtk::CheckButton _chk_clip_bed;
     Gtk::CheckButton _chk_lead_in;
     Gtk::CheckButton _chk_lead_out;

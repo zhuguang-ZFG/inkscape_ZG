@@ -28,7 +28,7 @@ struct GrblPanelMappingPrefs
     bool invert_x = false;
     bool invert_y = false;
     bool flip_y = false;
-    bool align_origin = false;
+    std::string plot_anchor = "none";
     bool clip_bed = true;
     bool lead_in = false;
     bool lead_out = false;

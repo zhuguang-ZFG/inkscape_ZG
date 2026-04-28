@@ -104,8 +104,6 @@ using Inkscape::choose_file_save;
 namespace {
 
 constexpr auto k_default_end_gcode = "G0 X0 Y0";
-constexpr auto k_motor_disable_gcode = "MD";
-
 Glib::ustring build_bed_preset_label(std::string const &id, double const width_mm, double const depth_mm)
 {
     if (id == "custom") {
@@ -302,6 +300,62 @@ std::string extract_ipv4_from_reply(std::string const &reply)
     return {};
 }
 
+bool parse_status_wco_mm(std::string const &status, double &x_mm, double &y_mm)
+{
+    auto const pos = status.find("WCO:");
+    if (pos == std::string::npos) {
+        return false;
+    }
+
+    auto const begin = pos + 4;
+    auto const end = status.find_first_of("|>", begin);
+    auto const payload = status.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+
+    std::istringstream ss(payload);
+    std::string part;
+    if (!std::getline(ss, part, ',')) {
+        return false;
+    }
+    char *endptr = nullptr;
+    x_mm = std::strtod(part.c_str(), &endptr);
+    if (endptr == part.c_str()) {
+        return false;
+    }
+
+    if (!std::getline(ss, part, ',')) {
+        return false;
+    }
+    endptr = nullptr;
+    y_mm = std::strtod(part.c_str(), &endptr);
+    if (endptr == part.c_str()) {
+        return false;
+    }
+
+    return true;
+}
+
+Glib::ustring build_nonzero_wco_block_reason(Glib::ustring const &status_text)
+{
+    double wco_x = 0.0;
+    double wco_y = 0.0;
+    if (!parse_status_wco_mm(status_text.raw(), wco_x, wco_y)) {
+        return {};
+    }
+
+    double constexpr eps = 1e-3;
+    if (std::abs(wco_x) <= eps && std::abs(wco_y) <= eps) {
+        return {};
+    }
+
+    return Glib::ustring::compose(
+        _("当前控制器存在非零工作坐标偏移 WCO：X=%1 mm，Y=%2 mm。\n"
+          "在“限制在机器床面内”或启用“放置位置”平移时继续发送，"
+          "G-code 会按工作坐标执行，可能整体平移到机器真实行程之外。\n"
+          "请先把机器移动到真实左下角后重新设零，或清除当前 G92/工作原点偏移。"),
+        Glib::ustring::format(std::fixed, std::setprecision(3), wco_x),
+        Glib::ustring::format(std::fixed, std::setprecision(3), wco_y));
+}
+
 constexpr std::size_t k_max_gcode_stream_lines = 200000;
 
 constexpr std::size_t k_preview_max_strokes = 12000;
@@ -323,7 +377,6 @@ constexpr auto k_pref_swap_xy = "/options/grbl/swap-xy";
 constexpr auto k_pref_invert_x = "/options/grbl/invert-x";
 constexpr auto k_pref_invert_y = "/options/grbl/invert-y";
 constexpr auto k_pref_flip_y = "/options/grbl/flip-y-canvas";
-constexpr auto k_pref_align_origin = "/options/grbl/align-content-min";
 constexpr auto k_pref_clip_bed = "/options/grbl/clip-to-machine-bed";
 constexpr auto k_pref_clip_bed_migration_v1 = "/options/grbl/migrations/clip-to-machine-bed-default-v1";
 constexpr auto k_pref_bed_width = "/options/grbl/machine-bed-width-mm";
@@ -345,6 +398,17 @@ constexpr auto k_pref_tool_change_x = "/options/grbl/tool-change-x-mm";
 constexpr auto k_pref_tool_change_y = "/options/grbl/tool-change-y-mm";
 constexpr auto k_pref_start_gcode = "/options/grbl/start-gcode";
 constexpr auto k_pref_end_gcode = "/options/grbl/end-gcode";
+constexpr auto k_plot_anchor_none = "none";
+constexpr auto k_plot_anchor_lower_left = "lower_left";
+constexpr auto k_plot_anchor_lower_right = "lower_right";
+constexpr auto k_plot_anchor_upper_left = "upper_left";
+constexpr auto k_plot_anchor_upper_right = "upper_right";
+constexpr auto k_plot_anchor_center = "center";
+
+bool is_active_plot_anchor_id(Glib::ustring const &anchor_id)
+{
+    return !anchor_id.empty() && anchor_id != k_plot_anchor_none;
+}
 
 void migrate_clip_to_machine_bed_default(Inkscape::Preferences *prefs)
 {
@@ -427,7 +491,7 @@ GrblControlPanel::GrblControlPanel()
     , _btn_ym(_("_Y-"))
     , _btn_pen_up(_("抬笔(_P)"))
     , _btn_pen_down(_("落笔(_D)"))
-    , _btn_motors(_("电机休眠(_O)（$SLP）"))
+    , _btn_motors(_("电机失能(_O)（$MD）"))
     , _btn_clear_alarm(_("清除报警(_M)（$X）"))
     , _btn_fit_to_bed(_("缩放到绘图范围内"))
     , _btn_center_to_bed(_("居中到绘图范围"))
@@ -451,7 +515,6 @@ GrblControlPanel::GrblControlPanel()
     , _chk_invert_x(_("反转 X"))
     , _chk_invert_y(_("反转 Y"))
     , _chk_flip_y(_("按页面高度镜像 Y"))
-    , _chk_align_origin(_("左下角对齐到机器原点"))
     , _chk_clip_bed(_("限制在机器床面内"))
     , _chk_lead_in(_("开放路径起笔延伸"))
     , _chk_lead_out(_("开放路径收笔延伸"))
@@ -589,7 +652,7 @@ void GrblControlPanel::update_mapping_control_sensitivity(bool const allow_inter
     _chk_invert_x.set_sensitive(state.invert_x);
     _chk_invert_y.set_sensitive(state.invert_y);
     _chk_flip_y.set_sensitive(state.flip_y);
-    _chk_align_origin.set_sensitive(state.align_origin);
+    _plot_anchor_combo.set_sensitive(state.align_origin);
     _chk_clip_bed.set_sensitive(state.clip_bed);
     _chk_lead_in.set_sensitive(state.lead_in);
     _chk_lead_out.set_sensitive(state.lead_out);
@@ -1135,7 +1198,10 @@ void GrblControlPanel::apply_mapping_preferences_to_ui(GrblPanelMappingPrefs con
     _chk_invert_x.set_active(values.invert_x);
     _chk_invert_y.set_active(values.invert_y);
     _chk_flip_y.set_active(values.flip_y);
-    _chk_align_origin.set_active(values.align_origin);
+    _plot_anchor_combo.set_active_id(values.plot_anchor);
+    if (_plot_anchor_combo.get_active_id().empty()) {
+        _plot_anchor_combo.set_active_id(k_plot_anchor_none);
+    }
     _chk_clip_bed.set_active(values.clip_bed);
     _chk_lead_in.set_active(values.lead_in);
     _chk_lead_out.set_active(values.lead_out);
@@ -1189,7 +1255,10 @@ GrblPanelMappingPrefs GrblControlPanel::read_mapping_preferences_from_ui() const
     values.invert_x = _chk_invert_x.get_active();
     values.invert_y = _chk_invert_y.get_active();
     values.flip_y = _chk_flip_y.get_active();
-    values.align_origin = _chk_align_origin.get_active();
+    values.plot_anchor = _plot_anchor_combo.get_active_id();
+    if (values.plot_anchor.empty()) {
+        values.plot_anchor = k_plot_anchor_none;
+    }
     values.clip_bed = _chk_clip_bed.get_active();
     values.lead_in = _chk_lead_in.get_active();
     values.lead_out = _chk_lead_out.get_active();
@@ -1272,7 +1341,7 @@ void GrblControlPanel::connect_mapping_preference_signals()
     connect_refreshing(_chk_invert_x, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_invert_y, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_flip_y, &Gtk::CheckButton::signal_toggled);
-    connect_refreshing(_chk_align_origin, &Gtk::CheckButton::signal_toggled);
+    _plot_anchor_combo.signal_changed().connect([this] { save_mapping_preferences_from_ui(true); });
     connect_refreshing(_chk_clip_bed, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_lead_in, &Gtk::CheckButton::signal_toggled);
     connect_refreshing(_chk_lead_out, &Gtk::CheckButton::signal_toggled);
@@ -1410,7 +1479,18 @@ void GrblControlPanel::remember_editor_gcode_generation_state(Inkscape::Axidraw:
     _editor_gcode_generation_document = getDocument();
     _editor_gcode_generation_state = make_editor_gcode_generation_state(
         params.clip_to_machine_bed, params.swap_xy, params.invert_x, params.invert_y,
-        params.flip_y_canvas, params.align_content_min_to_origin,
+        params.flip_y_canvas,
+        [&params]() -> Glib::ustring {
+            switch (params.plot_anchor) {
+                case Inkscape::Axidraw::GrblPlotAnchorPosition::LowerLeft: return k_plot_anchor_lower_left;
+                case Inkscape::Axidraw::GrblPlotAnchorPosition::LowerRight: return k_plot_anchor_lower_right;
+                case Inkscape::Axidraw::GrblPlotAnchorPosition::UpperLeft: return k_plot_anchor_upper_left;
+                case Inkscape::Axidraw::GrblPlotAnchorPosition::UpperRight: return k_plot_anchor_upper_right;
+                case Inkscape::Axidraw::GrblPlotAnchorPosition::Center: return k_plot_anchor_center;
+                case Inkscape::Axidraw::GrblPlotAnchorPosition::None:
+                default: return k_plot_anchor_none;
+            }
+        }(),
         params.machine_bed_width_mm, params.machine_bed_depth_mm);
     _editor_gcode_generation_state_warned_stale = false;
 }
@@ -1424,7 +1504,7 @@ bool GrblControlPanel::current_mapping_matches_editor_gcode_generation_state() c
 {
     auto const inputs = make_editor_gcode_generation_inputs(
         _chk_clip_bed.get_active(), _chk_swap_xy.get_active(), _chk_invert_x.get_active(),
-        _chk_invert_y.get_active(), _chk_flip_y.get_active(), _chk_align_origin.get_active(),
+        _chk_invert_y.get_active(), _chk_flip_y.get_active(), _plot_anchor_combo.get_active_id(),
         _bed_width_spin.get_value(), _bed_depth_spin.get_value());
     return editor_gcode_generation_state_matches(_editor_gcode_generation_state, inputs);
 }
@@ -1433,7 +1513,7 @@ bool GrblControlPanel::current_editor_gcode_generation_state_matches_active_cont
 {
     auto const inputs = make_editor_gcode_generation_inputs(
         _chk_clip_bed.get_active(), _chk_swap_xy.get_active(), _chk_invert_x.get_active(),
-        _chk_invert_y.get_active(), _chk_flip_y.get_active(), _chk_align_origin.get_active(),
+        _chk_invert_y.get_active(), _chk_flip_y.get_active(), _plot_anchor_combo.get_active_id(),
         _bed_width_spin.get_value(), _bed_depth_spin.get_value());
     return editor_gcode_generation_context_matches(
         _editor_gcode_generation_state, inputs, current_document_matches_editor_gcode_generation_state());
@@ -1513,7 +1593,6 @@ GrblPanelSenderContext GrblControlPanel::make_sender_context()
         .post_status = [this](Glib::ustring const &text, bool is_error) { post_status(text, is_error); },
         .post_not_connected_status = [this] { post_not_connected_status(); },
         .post_gcode_stream_result = [this](std::string const &err) { post_gcode_stream_result(err); },
-        .should_defer_motor_disable_cleanup = [this] { return _cancel_return_to_origin_pending; },
         .refresh_plot_feedback_after_gcode_change = [this] { refresh_plot_feedback_after_gcode_change(); },
         .finish_worker = [this](std::unique_lock<std::mutex> &lock) { finish_gcode_stream_worker(lock); },
         .with_plot_waits = [this](std::function<void()> work) { with_grbl_plot_waits(std::move(work)); },
@@ -2362,7 +2441,16 @@ void GrblControlPanel::return_to_work_origin_after_cancel()
                 return;
             }
         }
-        if (!_link->send_line_wait_ok(k_motor_disable_gcode, e)) {
+        if (auto *serial = _link->serial_port()) {
+            if (!Inkscape::Axidraw::grbl_wait_until_idle(*serial, e)) {
+                return;
+            }
+        } else if (auto *tcp = _link->tcp_port()) {
+            if (!Inkscape::Axidraw::grbl_wait_until_idle(*tcp, e)) {
+                return;
+            }
+        }
+        if (!_link->send_line_wait_ok("$MD", e)) {
             return;
         }
         if (work_origin.refresh_preview) {
@@ -2577,6 +2665,13 @@ void GrblControlPanel::on_send_document_direct()
         post_status(block_reason, true);
         return;
     }
+    if (_chk_clip_bed.get_active() || is_active_plot_anchor_id(_plot_anchor_combo.get_active_id())) {
+        auto const wco_block_reason = build_nonzero_wco_block_reason(_machine_status.get_text());
+        if (!wco_block_reason.empty()) {
+            post_status(wco_block_reason, true);
+            return;
+        }
+    }
 
     bool const use_current_layer_without_selection = session.context.use_current_layer_without_selection;
     auto *selection = session.context.selection;
@@ -2732,6 +2827,13 @@ void GrblControlPanel::on_send_gcode()
     if (!block_reason.empty()) {
         post_status(block_reason, true);
         return;
+    }
+    if (_chk_clip_bed.get_active() || is_active_plot_anchor_id(_plot_anchor_combo.get_active_id())) {
+        auto const wco_block_reason = build_nonzero_wco_block_reason(_machine_status.get_text());
+        if (!wco_block_reason.empty()) {
+            post_status(wco_block_reason, true);
+            return;
+        }
     }
 
     auto const mapping_prefs = read_mapping_preferences_from_ui();
@@ -2889,7 +2991,14 @@ void GrblControlPanel::build_ui()
     _chk_invert_x.set_tooltip_text(_("按床面宽度镜像最终输出到机器的 X 坐标方向。"));
     _chk_invert_y.set_tooltip_text(_("按床面高度镜像最终输出到机器的 Y 坐标方向。"));
     _chk_flip_y.set_tooltip_text(_("按页面高度镜像 Y，用于把 SVG 画布的 Y 向下转换为机器常见的 Y 向上。"));
-    _chk_align_origin.set_tooltip_text(_("将导出结果整体平移，使其左下角落在机器 X0 Y0。"));
+    _plot_anchor_combo.append(k_plot_anchor_none, _("不调整"));
+    _plot_anchor_combo.append(k_plot_anchor_lower_left, _("左下"));
+    _plot_anchor_combo.append(k_plot_anchor_lower_right, _("右下"));
+    _plot_anchor_combo.append(k_plot_anchor_upper_left, _("左上"));
+    _plot_anchor_combo.append(k_plot_anchor_upper_right, _("右上"));
+    _plot_anchor_combo.append(k_plot_anchor_center, _("中间"));
+    _plot_anchor_combo.set_active_id(k_plot_anchor_none);
+    _plot_anchor_combo.set_tooltip_text(_("把整张图在机器床面内整体平移到指定位置：左下、右下、左上、右上或中间。"));
     _chk_clip_bed.set_tooltip_text(_("将运动裁剪在床面范围内。超出部分会被截断。"));
     _chk_long_pen_up.set_tooltip_text(_("参考 kxnx 的绘图机策略：长距离空走前先抬到更高的位置，减少拖笔或蹭纸。"));
     _chk_near_connect.set_tooltip_text(_("参考 kxnx 的 nearDst 思路：如果相邻两段笔画距离很近，就直接连成一笔，减少抬笔和空走。启用后会实际画出连接线，属于改几何，不是纯路径排序。"));
@@ -3110,11 +3219,11 @@ void GrblControlPanel::build_ui()
     _end_gcode_view.set_tooltip_text(_("例如：G0 X0 Y0、M84、M117 Plot Done 等。一行一条；空行会忽略。"));
     _chk_canvas_plot_preview.set_tooltip_text(
         _("可选的文档空间参考叠加层：使用与导出时相同的采样和笔画顺序，但发生在毫米换算、页面 Y 镜像、"
-          "将绘图原点平移到 X0 Y0、以及机器床面裁剪之前。可用来对比原始几何与最终的机器空间预览。"));
+          "按所选放置位置整体平移、以及机器床面裁剪之前。可用来对比原始几何与最终的机器空间预览。"));
     _chk_canvas_plot_preview.set_halign(Gtk::Align::START);
     _chk_machine_space_preview.set_tooltip_text(
         _("主预览叠加层：显示与最终 G-code 相同的折线路径，已完成毫米换算、可选页面 Y 镜像、"
-          "将绘图原点平移到 X0 Y0，以及可选机器床面裁剪，然后再映射回文档单位。"
+          "按所选放置位置整体平移，以及可选机器床面裁剪，然后再映射回文档单位。"
           "如果床面裁剪截掉了部分笔画，则这些区域的预览会是近似结果。"));
     _chk_machine_space_preview.set_halign(Gtk::Align::START);
     _chk_machine_space_preview.set_active(true);
@@ -3253,8 +3362,10 @@ void GrblControlPanel::build_ui()
     mapping_grid->attach(_chk_swap_xy, 0, 0, 1, 1);
     mapping_grid->attach(_chk_invert_x, 1, 0, 1, 1);
     mapping_grid->attach(_chk_invert_y, 2, 0, 1, 1);
-    mapping_grid->attach(_chk_flip_y, 0, 1, 2, 1);
-    mapping_grid->attach(_chk_align_origin, 2, 1, 1, 1);
+    mapping_grid->attach(_chk_flip_y, 0, 1, 1, 1);
+    auto *lbl_plot_anchor = Gtk::make_managed<Gtk::Label>(_("放置位置"), Gtk::Align::START);
+    mapping_grid->attach(*lbl_plot_anchor, 1, 1, 1, 1);
+    mapping_grid->attach(_plot_anchor_combo, 2, 1, 1, 1);
     mapping_grid->attach(_chk_clip_bed, 0, 2, 1, 1);
     auto *lbl_bed_preset = Gtk::make_managed<Gtk::Label>(_("纸张/范围"), Gtk::Align::START);
     auto *lbl_bed_w = Gtk::make_managed<Gtk::Label>(_("自定义宽(mm)"), Gtk::Align::START);
@@ -3514,7 +3625,7 @@ void GrblControlPanel::build_ui()
     _btn_pen_down.signal_clicked().connect([this] { send_pen_state(false); });
     _btn_motors.signal_clicked().connect([this] {
         run_action([this](std::string &e) {
-            if (!_link->send_line_wait_ok("$SLP", e)) {
+            if (!_link->send_line_wait_ok("$MD", e)) {
                 return;
             }
         });

@@ -61,6 +61,7 @@ constexpr auto k_pref_clip_bed = "/options/grbl/clip-to-machine-bed";
 constexpr auto k_pref_clip_bed_migration_v1 = "/options/grbl/migrations/clip-to-machine-bed-default-v1";
 constexpr auto k_pref_end_gcode = "/options/grbl/end-gcode";
 constexpr auto k_pref_end_gcode_migration_v1 = "/options/grbl/migrations/end-gcode-default-v1";
+constexpr auto k_pref_plot_anchor = "/options/grbl/plot-anchor-position";
 
 void migrate_clip_to_machine_bed_default(Inkscape::Preferences *prefs)
 {
@@ -93,6 +94,31 @@ std::string normalize_end_gcode(std::string value)
         return k_default_end_gcode;
     }
     return value;
+}
+
+GrblPlotAnchorPosition grbl_plot_anchor_position_from_pref(std::string const &value)
+{
+    if (value == "lower_left") {
+        return GrblPlotAnchorPosition::LowerLeft;
+    }
+    if (value == "lower_right") {
+        return GrblPlotAnchorPosition::LowerRight;
+    }
+    if (value == "upper_left") {
+        return GrblPlotAnchorPosition::UpperLeft;
+    }
+    if (value == "upper_right") {
+        return GrblPlotAnchorPosition::UpperRight;
+    }
+    if (value == "center") {
+        return GrblPlotAnchorPosition::Center;
+    }
+    return GrblPlotAnchorPosition::None;
+}
+
+bool grbl_plot_anchor_position_is_active(GrblPlotAnchorPosition const anchor)
+{
+    return anchor != GrblPlotAnchorPosition::None;
 }
 
 bool emit_optional_dwell_ms(std::function<bool(std::string const &)> const &emit_line, double const delay_ms)
@@ -1299,19 +1325,25 @@ static void apply_axis_mapping(std::vector<std::vector<Geom::Point>> &strokes, b
     }
 }
 
-/** @param shift_x_out / shift_y_out when non-null, receive the minima subtracted (mm). */
-static bool apply_align_min_to_origin(std::vector<std::vector<Geom::Point>> &strokes, double *shift_x_out,
-                                      double *shift_y_out)
+static bool apply_plot_anchor_translation(std::vector<std::vector<Geom::Point>> &strokes,
+                                          GrblPlotAnchorPosition const anchor,
+                                          double const machine_bed_width_mm,
+                                          double const machine_bed_depth_mm,
+                                          double *shift_x_out, double *shift_y_out)
 {
     double minx = std::numeric_limits<double>::infinity();
     double miny = std::numeric_limits<double>::infinity();
+    double maxx = -std::numeric_limits<double>::infinity();
+    double maxy = -std::numeric_limits<double>::infinity();
     for (auto const &st : strokes) {
         for (auto const &p : st) {
             minx = std::min(minx, p[Geom::X]);
             miny = std::min(miny, p[Geom::Y]);
+            maxx = std::max(maxx, p[Geom::X]);
+            maxy = std::max(maxy, p[Geom::Y]);
         }
     }
-    if (!std::isfinite(minx) || !std::isfinite(miny)) {
+    if (!std::isfinite(minx) || !std::isfinite(miny) || !std::isfinite(maxx) || !std::isfinite(maxy)) {
         if (shift_x_out) {
             *shift_x_out = 0;
         }
@@ -1320,16 +1352,44 @@ static bool apply_align_min_to_origin(std::vector<std::vector<Geom::Point>> &str
         }
         return false;
     }
+
+    double shift_x = 0.0;
+    double shift_y = 0.0;
+    switch (anchor) {
+        case GrblPlotAnchorPosition::None:
+            return false;
+        case GrblPlotAnchorPosition::LowerLeft:
+            shift_x = -minx;
+            shift_y = -miny;
+            break;
+        case GrblPlotAnchorPosition::LowerRight:
+            shift_x = machine_bed_width_mm - maxx;
+            shift_y = -miny;
+            break;
+        case GrblPlotAnchorPosition::UpperLeft:
+            shift_x = -minx;
+            shift_y = machine_bed_depth_mm - maxy;
+            break;
+        case GrblPlotAnchorPosition::UpperRight:
+            shift_x = machine_bed_width_mm - maxx;
+            shift_y = machine_bed_depth_mm - maxy;
+            break;
+        case GrblPlotAnchorPosition::Center:
+            shift_x = (machine_bed_width_mm - (minx + maxx)) * 0.5;
+            shift_y = (machine_bed_depth_mm - (miny + maxy)) * 0.5;
+            break;
+    }
+
     if (shift_x_out) {
-        *shift_x_out = minx;
+        *shift_x_out = shift_x;
     }
     if (shift_y_out) {
-        *shift_y_out = miny;
+        *shift_y_out = shift_y;
     }
     for (auto &st : strokes) {
         for (auto &p : st) {
-            p[Geom::X] -= minx;
-            p[Geom::Y] -= miny;
+            p[Geom::X] += shift_x;
+            p[Geom::Y] += shift_y;
         }
     }
     return true;
@@ -2383,20 +2443,27 @@ static void apply_axis_mapping_to_layers(std::vector<std::vector<std::vector<Geo
     }
 }
 
-static bool apply_align_min_to_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers, double *shift_x_out,
-                                      double *shift_y_out)
+static bool apply_plot_anchor_translation_to_layers(std::vector<std::vector<std::vector<Geom::Point>>> &layers,
+                                                    GrblPlotAnchorPosition const anchor,
+                                                    double const machine_bed_width_mm,
+                                                    double const machine_bed_depth_mm,
+                                                    double *shift_x_out, double *shift_y_out)
 {
     double minx = std::numeric_limits<double>::infinity();
     double miny = std::numeric_limits<double>::infinity();
+    double maxx = -std::numeric_limits<double>::infinity();
+    double maxy = -std::numeric_limits<double>::infinity();
     for (auto const &layer : layers) {
         for (auto const &st : layer) {
             for (auto const &p : st) {
                 minx = std::min(minx, p[Geom::X]);
                 miny = std::min(miny, p[Geom::Y]);
+                maxx = std::max(maxx, p[Geom::X]);
+                maxy = std::max(maxy, p[Geom::Y]);
             }
         }
     }
-    if (!std::isfinite(minx) || !std::isfinite(miny)) {
+    if (!std::isfinite(minx) || !std::isfinite(miny) || !std::isfinite(maxx) || !std::isfinite(maxy)) {
         if (shift_x_out) {
             *shift_x_out = 0;
         }
@@ -2405,17 +2472,45 @@ static bool apply_align_min_to_layers(std::vector<std::vector<std::vector<Geom::
         }
         return false;
     }
+
+    double shift_x = 0.0;
+    double shift_y = 0.0;
+    switch (anchor) {
+        case GrblPlotAnchorPosition::None:
+            return false;
+        case GrblPlotAnchorPosition::LowerLeft:
+            shift_x = -minx;
+            shift_y = -miny;
+            break;
+        case GrblPlotAnchorPosition::LowerRight:
+            shift_x = machine_bed_width_mm - maxx;
+            shift_y = -miny;
+            break;
+        case GrblPlotAnchorPosition::UpperLeft:
+            shift_x = -minx;
+            shift_y = machine_bed_depth_mm - maxy;
+            break;
+        case GrblPlotAnchorPosition::UpperRight:
+            shift_x = machine_bed_width_mm - maxx;
+            shift_y = machine_bed_depth_mm - maxy;
+            break;
+        case GrblPlotAnchorPosition::Center:
+            shift_x = (machine_bed_width_mm - (minx + maxx)) * 0.5;
+            shift_y = (machine_bed_depth_mm - (miny + maxy)) * 0.5;
+            break;
+    }
+
     if (shift_x_out) {
-        *shift_x_out = minx;
+        *shift_x_out = shift_x;
     }
     if (shift_y_out) {
-        *shift_y_out = miny;
+        *shift_y_out = shift_y;
     }
     for (auto &layer : layers) {
         for (auto &st : layer) {
             for (auto &p : st) {
-                p[Geom::X] -= minx;
-                p[Geom::Y] -= miny;
+                p[Geom::X] += shift_x;
+                p[Geom::Y] += shift_y;
             }
         }
     }
@@ -2655,15 +2750,19 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
             prep.preview_invert_y_applied = params.invert_y;
             log_grbl_stage_stats_layers("layered", "optimized", "after-mapping", prep.layers_mm, prep.layer_tool_ids, params);
             log_grbl_stage_stats_layers("layered", "baseline", "after-mapping", layers_mm_baseline, prep.layer_tool_ids, params);
-            if (params.align_content_min_to_origin) {
+            if (grbl_plot_anchor_position_is_active(params.plot_anchor)) {
                 double shx = 0;
                 double shy = 0;
-                if (apply_align_min_to_layers(prep.layers_mm, &shx, &shy)) {
+                if (apply_plot_anchor_translation_to_layers(prep.layers_mm, params.plot_anchor,
+                                                            params.machine_bed_width_mm, params.machine_bed_depth_mm,
+                                                            &shx, &shy)) {
                     prep.preview_align_applied = true;
                     prep.preview_align_shift_x_mm = shx;
                     prep.preview_align_shift_y_mm = shy;
                 }
-                apply_align_min_to_layers(layers_mm_baseline, nullptr, nullptr);
+                apply_plot_anchor_translation_to_layers(layers_mm_baseline, params.plot_anchor,
+                                                        params.machine_bed_width_mm, params.machine_bed_depth_mm,
+                                                        nullptr, nullptr);
             }
             log_grbl_stage_stats_layers("layered", "optimized", "after-align", prep.layers_mm, prep.layer_tool_ids, params);
             log_grbl_stage_stats_layers("layered", "baseline", "after-align", layers_mm_baseline, prep.layer_tool_ids, params);
@@ -2806,15 +2905,19 @@ static bool fill_prepared_plot_mm(SPDocument *doc, GrblExportParams const &param
     prep.preview_invert_y_applied = params.invert_y;
     log_grbl_stage_stats("flat", "optimized", "after-mapping", prep.flat_mm, params);
     log_grbl_stage_stats("flat", "baseline", "after-mapping", flat_mm_baseline, params);
-    if (params.align_content_min_to_origin) {
+    if (grbl_plot_anchor_position_is_active(params.plot_anchor)) {
         double shx = 0;
         double shy = 0;
-        if (apply_align_min_to_origin(prep.flat_mm, &shx, &shy)) {
+        if (apply_plot_anchor_translation(prep.flat_mm, params.plot_anchor,
+                                          params.machine_bed_width_mm, params.machine_bed_depth_mm,
+                                          &shx, &shy)) {
             prep.preview_align_applied = true;
             prep.preview_align_shift_x_mm = shx;
             prep.preview_align_shift_y_mm = shy;
         }
-        apply_align_min_to_origin(flat_mm_baseline, nullptr, nullptr);
+        apply_plot_anchor_translation(flat_mm_baseline, params.plot_anchor,
+                                      params.machine_bed_width_mm, params.machine_bed_depth_mm,
+                                      nullptr, nullptr);
     }
     log_grbl_stage_stats("flat", "optimized", "after-align", prep.flat_mm, params);
     log_grbl_stage_stats("flat", "baseline", "after-align", flat_mm_baseline, params);
@@ -3472,7 +3575,11 @@ void grbl_export_params_from_preferences(Inkscape::Preferences *prefs, GrblExpor
     params.swap_xy = prefs->getBool(k_swap_xy, false);
     params.invert_x = prefs->getBool(k_invert_x, false);
     params.invert_y = prefs->getBool(k_invert_y, false);
-    params.align_content_min_to_origin = prefs->getBool(k_align, false);
+    auto plot_anchor_pref = prefs->getString(k_pref_plot_anchor);
+    if (plot_anchor_pref.empty()) {
+        plot_anchor_pref = prefs->getBool(k_align, false) ? "lower_left" : "none";
+    }
+    params.plot_anchor = grbl_plot_anchor_position_from_pref(plot_anchor_pref);
     params.clip_to_machine_bed = prefs->getBool(k_pref_clip_bed, true);
     params.machine_bed_width_mm = prefs->getDoubleLimited(k_bw, 210.0, 1.0, 2000.0);
     params.machine_bed_depth_mm = prefs->getDoubleLimited(k_bd, 297.0, 1.0, 2000.0);
@@ -3650,8 +3757,8 @@ static void flatten_prep_strokes_mm(PreparedPlotMm const &prep, std::vector<std:
 static Geom::Point mm_after_plot_mapping_toward_doc(Geom::Point mm, DocumentMmMapper const &mapper, PreparedPlotMm const &meta)
 {
     if (meta.preview_align_applied) {
-        mm[Geom::X] += meta.preview_align_shift_x_mm;
-        mm[Geom::Y] += meta.preview_align_shift_y_mm;
+        mm[Geom::X] -= meta.preview_align_shift_x_mm;
+        mm[Geom::Y] -= meta.preview_align_shift_y_mm;
     }
     if (meta.preview_invert_x_applied) {
         mm[Geom::X] = -mm[Geom::X];

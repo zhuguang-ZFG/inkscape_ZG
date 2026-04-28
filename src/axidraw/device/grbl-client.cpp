@@ -185,6 +185,40 @@ static bool grbl_noise_line(std::string const &line)
 }
 
 template <typename PortT>
+static bool grbl_drain_immediate_followup_lines(PortT &port, std::string &err_out)
+{
+    // Some GRBL-derived Bluetooth/ESP32 firmwares may occasionally leave one or
+    // more duplicate "ok" lines queued after a command reply. If we return on
+    // the first "ok", the next command can accidentally consume that stale
+    // reply and desynchronize host-side ack accounting.
+    for (int i = 0; i < 8; ++i) {
+        std::string line;
+        if (!port.read_line(line, 5)) {
+            return true;
+        }
+        grbl_debug_log_write("grbl_post_ok_line", line);
+        if (grbl_noise_line(line)) {
+            continue;
+        }
+        if (line.starts_with("ok")) {
+            continue;
+        }
+        if (grbl_is_error_line(line)) {
+            err_out = line;
+            return false;
+        }
+        // Some variants may still echo command text after the ack.
+        char const c = line.front();
+        if (c == 'G' || c == 'M' || c == '$' || c == '?' || c == 'T') {
+            continue;
+        }
+        err_out = "unexpected response after ok: " + line;
+        return false;
+    }
+    return true;
+}
+
+template <typename PortT>
 static void grbl_wake_port(PortT &port)
 {
     port.purge_io();
@@ -223,7 +257,7 @@ static bool grbl_wait_ok(PortT &port, std::string &err_out)
             continue;
         }
         if (line.starts_with("ok")) {
-            return true;
+            return grbl_drain_immediate_followup_lines(port, err_out);
         }
         if (grbl_is_error_line(line)) {
             err_out = line;
@@ -330,6 +364,67 @@ static bool grbl_send_line_impl(PortT &port, std::string const &line, std::strin
     return true;
 }
 
+template <typename PortT>
+static bool grbl_wait_until_idle_impl(PortT &port, std::string &err_out, int timeout_ms)
+{
+    auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(timeout_ms, 0));
+    char const q = '?';
+
+    for (;;) {
+        if (grbl_cancelled(err_out)) {
+            return false;
+        }
+        grbl_progress_tick();
+
+        grbl_debug_log_write("grbl_wait_idle_poll", "?");
+        if (!(port.write_bytes(&q, 1) || port.write_line("?"))) {
+            err_out = "serial write failed";
+            return false;
+        }
+
+        for (;;) {
+            if (grbl_cancelled(err_out)) {
+                return false;
+            }
+            grbl_progress_tick();
+
+            auto const now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                err_out = "timeout waiting for controller idle state";
+                return false;
+            }
+
+            auto const remain_ms = static_cast<int>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+            std::string line;
+            if (!port.read_line(line, std::min(500, std::max(remain_ms, 1)))) {
+                break;
+            }
+
+            grbl_debug_log_write("grbl_wait_idle_line", line);
+            if (line.empty()) {
+                continue;
+            }
+            if (grbl_is_error_line(line)) {
+                err_out = line;
+                return false;
+            }
+            if (line.front() == '<') {
+                if (starts_with_ascii_case_insensitive(line.substr(1), "Idle")) {
+                    return true;
+                }
+                break;
+            }
+        }
+
+        if (std::chrono::steady_clock::now() >= deadline) {
+            err_out = "timeout waiting for controller idle state";
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
 bool grbl_send_line(SerialPort &port, std::string const &line, std::string &err_out)
 {
     return grbl_send_line_impl(port, line, err_out);
@@ -338,6 +433,16 @@ bool grbl_send_line(SerialPort &port, std::string const &line, std::string &err_
 bool grbl_send_line(TcpPort &port, std::string const &line, std::string &err_out)
 {
     return grbl_send_line_impl(port, line, err_out);
+}
+
+bool grbl_wait_until_idle(SerialPort &port, std::string &err_out, int timeout_ms)
+{
+    return grbl_wait_until_idle_impl(port, err_out, timeout_ms);
+}
+
+bool grbl_wait_until_idle(TcpPort &port, std::string &err_out, int timeout_ms)
+{
+    return grbl_wait_until_idle_impl(port, err_out, timeout_ms);
 }
 
 GrblProbeResult probe_open_grbl(SerialPort &port)

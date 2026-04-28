@@ -51,6 +51,9 @@ GrblProbeResult probe_grbl_tcp(std::string const &host, int port);
 /** Write a line to GRBL and wait for an `ok` (skips status / echo noise when possible). */
 bool grbl_send_line(SerialPort &port, std::string const &line, std::string &err_out);
 bool grbl_send_line(TcpPort &port, std::string const &line, std::string &err_out);
+/** Poll `?` until the controller reports `<Idle...>`. */
+bool grbl_wait_until_idle(SerialPort &port, std::string &err_out, int timeout_ms = 15000);
+bool grbl_wait_until_idle(TcpPort &port, std::string &err_out, int timeout_ms = 15000);
 
 /**
  * Send multiple GRBL commands in order, stopping at the first failure.

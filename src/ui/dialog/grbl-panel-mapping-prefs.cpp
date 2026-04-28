@@ -23,6 +23,7 @@ constexpr auto k_pref_invert_x = "/options/grbl/invert-x";
 constexpr auto k_pref_invert_y = "/options/grbl/invert-y";
 constexpr auto k_pref_flip_y = "/options/grbl/flip-y-canvas";
 constexpr auto k_pref_align_origin = "/options/grbl/align-content-min";
+constexpr auto k_pref_plot_anchor = "/options/grbl/plot-anchor-position";
 constexpr auto k_pref_clip_bed = "/options/grbl/clip-to-machine-bed";
 constexpr auto k_pref_lead_in = "/options/grbl/enable-path-lead-in";
 constexpr auto k_pref_lead_in_dist = "/options/grbl/path-lead-in-distance-mm";
@@ -147,7 +148,10 @@ GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs
     values.invert_x = prefs.getBool(k_pref_invert_x, false);
     values.invert_y = prefs.getBool(k_pref_invert_y, false);
     values.flip_y = prefs.getBool(k_pref_flip_y, false);
-    values.align_origin = prefs.getBool(k_pref_align_origin, false);
+    values.plot_anchor = prefs.getString(k_pref_plot_anchor, "");
+    if (values.plot_anchor.empty()) {
+        values.plot_anchor = prefs.getBool(k_pref_align_origin, false) ? "lower_left" : "none";
+    }
     values.clip_bed = prefs.getBool(k_pref_clip_bed, true);
     auto const legacy_lead_enabled = prefs.getBool(k_pref_lead_in_out, false);
     auto const legacy_lead_dist = prefs.getDoubleLimited(k_pref_lead_in_out_dist, 0.0, 0.0, 1000.0);
@@ -216,7 +220,8 @@ void save_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs, GrblPanelMappin
     prefs.setBool(k_pref_invert_x, values.invert_x);
     prefs.setBool(k_pref_invert_y, values.invert_y);
     prefs.setBool(k_pref_flip_y, values.flip_y);
-    prefs.setBool(k_pref_align_origin, values.align_origin);
+    prefs.setString(k_pref_plot_anchor, values.plot_anchor.empty() ? "none" : values.plot_anchor);
+    prefs.setBool(k_pref_align_origin, values.plot_anchor == "lower_left");
     prefs.setBool(k_pref_clip_bed, values.clip_bed);
     prefs.setBool(k_pref_lead_in, values.lead_in);
     prefs.setBool(k_pref_lead_out, values.lead_out);

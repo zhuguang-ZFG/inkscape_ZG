@@ -48,6 +48,15 @@ enum class SparseSamplingStrategy {
     Directional,
 };
 
+enum class GrblPlotAnchorPosition {
+    None,
+    LowerLeft,
+    LowerRight,
+    UpperLeft,
+    UpperRight,
+    Center,
+};
+
 class SerialPort;
 
 struct GrblExportParams {
@@ -104,8 +113,8 @@ struct GrblExportParams {
     bool invert_x = false;
     /// Invert the exported Y coordinate after document-to-machine conversion.
     bool invert_y = false;
-    /// Subtract the minimum X/Y of all points so the lower-left of the plotted bounds becomes (0, 0) in machine mm.
-    bool align_content_min_to_origin = false;
+    /// Translate the plotted bounds to a chosen anchor position within the machine bed.
+    GrblPlotAnchorPosition plot_anchor = GrblPlotAnchorPosition::None;
     /// Clip segments to the axis-aligned rectangle [0, machine_bed_width_mm] × [0, machine_bed_depth_mm].
     bool clip_to_machine_bed = false;
     double machine_bed_width_mm = 300.0;
