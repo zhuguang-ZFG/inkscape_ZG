@@ -204,6 +204,9 @@ private:
                                        Inkscape::Axidraw::GrblExportParams const &params,
                                        Inkscape::Axidraw::GrblExportContext const &ctx,
                                        Geom::Affine const &affine, Glib::ustring &status_note);
+    bool build_machine_bed_overlay(SPDocument *doc, SPDesktop *desktop,
+                                   Inkscape::Axidraw::GrblExportParams const &params,
+                                   Geom::Affine const &affine);
     void build_machine_axis_overlay(SPDesktop *desktop, Inkscape::Axidraw::GrblExportParams const &params,
                                     Geom::Affine const &affine);
     void schedule_plot_feedback_refresh(bool refresh_preview = true);
@@ -349,7 +352,10 @@ private:
 
     CanvasItemPtr<Inkscape::CanvasItemBpath> _plot_preview_overlay;
     CanvasItemPtr<Inkscape::CanvasItemBpath> _plot_preview_machine_overlay;
+    CanvasItemPtr<Inkscape::CanvasItemBpath> _plot_preview_machine_bed_overlay;
     CanvasItemPtr<Inkscape::CanvasItemBpath> _plot_preview_machine_axis_overlay;
+    CanvasItemPtr<Inkscape::CanvasItemText> _plot_preview_machine_bed_info_label;
+    CanvasItemPtr<Inkscape::CanvasItemText> _plot_preview_machine_anchor_label;
     CanvasItemPtr<Inkscape::CanvasItemText> _plot_preview_axis_origin_label;
     CanvasItemPtr<Inkscape::CanvasItemText> _plot_preview_axis_x_label;
     CanvasItemPtr<Inkscape::CanvasItemText> _plot_preview_axis_y_label;

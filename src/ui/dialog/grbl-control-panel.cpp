@@ -104,6 +104,10 @@ using Inkscape::choose_file_save;
 namespace {
 
 constexpr auto k_default_end_gcode = "G0 X0 Y0";
+constexpr double k_mm_per_in = 25.4;
+constexpr double k_px_per_in = 96.0;
+constexpr double k_mm_per_px = k_mm_per_in / k_px_per_in;
+
 Glib::ustring build_bed_preset_label(std::string const &id, double const width_mm, double const depth_mm)
 {
     if (id == "custom") {
@@ -438,6 +442,29 @@ Geom::PathVector transform_pathvector_to_desktop(Geom::PathVector const &paths, 
     return transformed;
 }
 
+bool get_bed_size_in_document_units_for_preview(SPDocument *doc, double const bed_width_mm, double const bed_height_mm,
+                                                double &bed_w_doc, double &bed_h_doc)
+{
+    if (!doc) {
+        return false;
+    }
+
+    auto const viewbox = doc->getViewBox();
+    auto const page_px = doc->getDimensions();
+    double const page_w_mm = page_px[Geom::X] * k_mm_per_px;
+    double const page_h_mm = page_px[Geom::Y] * k_mm_per_px;
+
+    if (viewbox.width() > 1e-9 && viewbox.height() > 1e-9 && page_w_mm > 1e-9 && page_h_mm > 1e-9) {
+        bed_w_doc = bed_width_mm * (viewbox.width() / page_w_mm);
+        bed_h_doc = bed_height_mm * (viewbox.height() / page_h_mm);
+    } else {
+        bed_w_doc = bed_width_mm / k_mm_per_px;
+        bed_h_doc = bed_height_mm / k_mm_per_px;
+    }
+
+    return bed_w_doc > 1e-9 && bed_h_doc > 1e-9;
+}
+
 void configure_preview_overlay(CanvasItemBpath &overlay, uint32_t const stroke, double const stroke_width)
 {
     overlay.set_stroke(stroke);
@@ -455,6 +482,54 @@ CanvasItemPtr<CanvasItemText> make_preview_axis_label(SPDesktop *desktop, Geom::
     label->set_border(4.0);
     label->set_visible(true);
     return label;
+}
+
+Glib::ustring build_plot_anchor_overlay_text(Inkscape::Axidraw::GrblPlotAnchorPosition anchor);
+
+Glib::ustring build_machine_bed_info_label_text(double const bed_width_mm, double const bed_height_mm,
+                                                Inkscape::Axidraw::GrblPlotAnchorPosition const anchor)
+{
+    return Glib::ustring::compose(_("机器行程 %1 × %2 mm\n当前放置 %3"),
+                                  Glib::ustring::format(std::fixed, std::setprecision(0), bed_width_mm),
+                                  Glib::ustring::format(std::fixed, std::setprecision(0), bed_height_mm),
+                                  build_plot_anchor_overlay_text(anchor));
+}
+
+Glib::ustring build_plot_anchor_overlay_text(Inkscape::Axidraw::GrblPlotAnchorPosition const anchor)
+{
+    switch (anchor) {
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::LowerLeft:
+            return _("左下");
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::LowerRight:
+            return _("右下");
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::UpperLeft:
+            return _("左上");
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::UpperRight:
+            return _("右上");
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::Center:
+            return _("中间");
+        default:
+            return _("不调整");
+    }
+}
+
+Geom::Point get_plot_anchor_overlay_position(Inkscape::Axidraw::GrblPlotAnchorPosition const anchor,
+                                             double const bed_w_doc, double const bed_h_doc)
+{
+    switch (anchor) {
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::LowerLeft:
+            return {0.0, bed_h_doc};
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::LowerRight:
+            return {bed_w_doc, bed_h_doc};
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::UpperLeft:
+            return {0.0, 0.0};
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::UpperRight:
+            return {bed_w_doc, 0.0};
+        case Inkscape::Axidraw::GrblPlotAnchorPosition::Center:
+            return {bed_w_doc * 0.5, bed_h_doc * 0.5};
+        default:
+            return {0.0, 0.0};
+    }
 }
 
 /// Last folder for G-code save/open dialogs in this panel.
@@ -2481,7 +2556,10 @@ void GrblControlPanel::clear_plot_preview_overlay()
 {
     _plot_preview_overlay.reset();
     _plot_preview_machine_overlay.reset();
+    _plot_preview_machine_bed_overlay.reset();
     _plot_preview_machine_axis_overlay.reset();
+    _plot_preview_machine_bed_info_label.reset();
+    _plot_preview_machine_anchor_label.reset();
     _plot_preview_axis_origin_label.reset();
     _plot_preview_axis_x_label.reset();
     _plot_preview_axis_y_label.reset();
@@ -2546,6 +2624,56 @@ bool GrblControlPanel::build_machine_preview_overlay(SPDocument *doc, SPDesktop 
     return true;
 }
 
+bool GrblControlPanel::build_machine_bed_overlay(SPDocument *doc, SPDesktop *desktop,
+                                                 Inkscape::Axidraw::GrblExportParams const &params,
+                                                 Geom::Affine const &affine)
+{
+    double bed_w_doc = 0.0;
+    double bed_h_doc = 0.0;
+    if (!get_bed_size_in_document_units_for_preview(doc, _bed_width_spin.get_value(), _bed_depth_spin.get_value(),
+                                                    bed_w_doc, bed_h_doc)) {
+        return false;
+    }
+
+    Geom::Path bed(Geom::Point(0.0, 0.0));
+    bed.appendNew<Geom::LineSegment>(Geom::Point(bed_w_doc, 0.0));
+    bed.appendNew<Geom::LineSegment>(Geom::Point(bed_w_doc, bed_h_doc));
+    bed.appendNew<Geom::LineSegment>(Geom::Point(0.0, bed_h_doc));
+    bed.close();
+
+    Geom::PathVector bed_pv;
+    bed_pv.push_back(std::move(bed));
+    _plot_preview_machine_bed_overlay = make_canvasitem<CanvasItemBpath>(
+        desktop->getCanvasTemp(), transform_pathvector_to_desktop(bed_pv, affine), true);
+    configure_preview_overlay(*_plot_preview_machine_bed_overlay, 0x00cc66ee, 3.0);
+
+    auto const bed_origin_dt = Geom::Point(0.0, 0.0) * affine;
+    _plot_preview_machine_bed_info_label = make_preview_axis_label(
+        desktop, bed_origin_dt + Geom::Point(10.0, 12.0),
+        build_machine_bed_info_label_text(_bed_width_spin.get_value(), _bed_depth_spin.get_value(), params.plot_anchor),
+        0x006622ee);
+
+    auto const anchor_doc = get_plot_anchor_overlay_position(params.plot_anchor, bed_w_doc, bed_h_doc);
+    auto anchor_dt = anchor_doc * affine;
+    if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::LowerLeft) {
+        anchor_dt += Geom::Point(10.0, -12.0);
+    } else if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::LowerRight) {
+        anchor_dt += Geom::Point(-84.0, -12.0);
+    } else if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::UpperLeft) {
+        anchor_dt += Geom::Point(10.0, 28.0);
+    } else if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::UpperRight) {
+        anchor_dt += Geom::Point(-84.0, 28.0);
+    } else if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::Center) {
+        anchor_dt += Geom::Point(-36.0, -8.0);
+    } else {
+        anchor_dt += Geom::Point(10.0, 34.0);
+    }
+    _plot_preview_machine_anchor_label = make_preview_axis_label(
+        desktop, anchor_dt, Glib::ustring::compose(_("锚点 %1"), build_plot_anchor_overlay_text(params.plot_anchor)),
+        0x004488ee);
+    return true;
+}
+
 void GrblControlPanel::build_machine_axis_overlay(SPDesktop *desktop, Inkscape::Axidraw::GrblExportParams const &params,
                                                   Geom::Affine const &affine)
 {
@@ -2601,6 +2729,7 @@ void GrblControlPanel::sync_plot_preview_overlay()
         return;
     }
 
+    build_machine_bed_overlay(doc, desk, session.params, aff);
     build_machine_axis_overlay(desk, session.params, aff);
     if (ui_plan.post_status) {
         post_status(ui_plan.status, false);
