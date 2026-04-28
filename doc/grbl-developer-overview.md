@@ -68,7 +68,11 @@ GrblExportContext ←  desktop、selection、limit-to-current-layer、cancel、�
 
 - `/options/grbl/*` 与 `GrblExportParams` 的字段映射、默认值、范围及互斥关系，见 `doc/grbl-preferences-reference.md`。
 
-## 8. 下一步文档缺口（未在本页展开）
+## 8. CLI 导出说明
+
+- `--export-grbl-gcode` 的命令示例、stdout/stderr 语义与注意事项，见 `doc/grbl-cli-export.md`。
+
+## 9. 下一步文档缺口（未在本页展开）
 
 - 控制面板操作流程（开发视角）与典型故障对照 `grbl_error_to_user_message` 的排障说明。
 
