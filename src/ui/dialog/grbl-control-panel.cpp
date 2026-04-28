@@ -107,6 +107,11 @@ constexpr auto k_default_end_gcode = "G0 X0 Y0";
 constexpr double k_mm_per_in = 25.4;
 constexpr double k_px_per_in = 96.0;
 constexpr double k_mm_per_px = k_mm_per_in / k_px_per_in;
+constexpr uint32_t k_machine_bed_stroke = 0x00c46aee;
+constexpr uint32_t k_machine_bed_outline = 0x00331aee;
+constexpr uint32_t k_machine_label_bg = 0x005c2fef;
+constexpr uint32_t k_machine_anchor_bg = 0x00733cef;
+constexpr uint32_t k_machine_axis_bg = 0x006437ef;
 
 Glib::ustring build_bed_preset_label(std::string const &id, double const width_mm, double const depth_mm)
 {
@@ -473,14 +478,34 @@ void configure_preview_overlay(CanvasItemBpath &overlay, uint32_t const stroke, 
     overlay.set_visible(true);
 }
 
+void configure_machine_frame_overlay(CanvasItemBpath &overlay)
+{
+    overlay.set_stroke(k_machine_bed_stroke);
+    overlay.set_fill(0x00000000, SP_WIND_RULE_NONZERO);
+    overlay.set_stroke_width(3.2);
+    overlay.set_outline(k_machine_bed_outline);
+    overlay.set_outline_width(1.4);
+    overlay.set_visible(true);
+}
+
 CanvasItemPtr<CanvasItemText> make_preview_axis_label(SPDesktop *desktop, Geom::Point const &pos, Glib::ustring const &text,
                                                       uint32_t const bg)
 {
     auto label = make_canvasitem<CanvasItemText>(desktop->getCanvasTemp(), pos, text);
-    label->set_fontsize(11.0);
+    label->set_fontsize(13.0);
     label->set_background(bg);
-    label->set_border(4.0);
+    label->set_border(6.0);
+    label->set_bg_radius(0.3);
     label->set_visible(true);
+    return label;
+}
+
+CanvasItemPtr<CanvasItemText> make_preview_axis_label(SPDesktop *desktop, Geom::Point const &pos, Glib::ustring const &text,
+                                                      uint32_t const bg, Geom::Point const &anchor, Geom::Point const &adjust)
+{
+    auto label = make_preview_axis_label(desktop, pos, text, bg);
+    label->set_anchor(anchor);
+    label->set_adjust(adjust);
     return label;
 }
 
@@ -2645,13 +2670,13 @@ bool GrblControlPanel::build_machine_bed_overlay(SPDocument *doc, SPDesktop *des
     bed_pv.push_back(std::move(bed));
     _plot_preview_machine_bed_overlay = make_canvasitem<CanvasItemBpath>(
         desktop->getCanvasTemp(), transform_pathvector_to_desktop(bed_pv, affine), true);
-    configure_preview_overlay(*_plot_preview_machine_bed_overlay, 0x00cc66ee, 3.0);
+    configure_machine_frame_overlay(*_plot_preview_machine_bed_overlay);
 
     auto const bed_origin_dt = Geom::Point(0.0, 0.0) * affine;
     _plot_preview_machine_bed_info_label = make_preview_axis_label(
         desktop, bed_origin_dt + Geom::Point(10.0, 12.0),
         build_machine_bed_info_label_text(_bed_width_spin.get_value(), _bed_depth_spin.get_value(), params.plot_anchor),
-        0x006622ee);
+        k_machine_label_bg);
 
     auto const anchor_doc = get_plot_anchor_overlay_position(params.plot_anchor, bed_w_doc, bed_h_doc);
     auto anchor_dt = anchor_doc * affine;
@@ -2670,17 +2695,22 @@ bool GrblControlPanel::build_machine_bed_overlay(SPDocument *doc, SPDesktop *des
     }
     _plot_preview_machine_anchor_label = make_preview_axis_label(
         desktop, anchor_dt, Glib::ustring::compose(_("锚点 %1"), build_plot_anchor_overlay_text(params.plot_anchor)),
-        0x004488ee);
+        k_machine_anchor_bg);
     return true;
 }
 
 void GrblControlPanel::build_machine_axis_overlay(SPDesktop *desktop, Inkscape::Axidraw::GrblExportParams const &params,
                                                   Geom::Affine const &affine)
 {
-    double const bed_w = std::max(1.0, _bed_width_spin.get_value());
-    double const bed_h = std::max(1.0, _bed_depth_spin.get_value());
+    auto *doc = getDocument();
+    double bed_w_doc = 0.0;
+    double bed_h_doc = 0.0;
+    if (!doc || !get_bed_size_in_document_units_for_preview(doc, _bed_width_spin.get_value(), _bed_depth_spin.get_value(),
+                                                            bed_w_doc, bed_h_doc)) {
+        return;
+    }
     Geom::Point const origin_dt = Geom::Point(0.0, 0.0) * affine;
-    double const axis_len_doc = std::max(18.0, std::min(bed_w, bed_h) * 0.14);
+    double const axis_len_doc = std::max(18.0, std::min(bed_w_doc, bed_h_doc) * 0.14);
 
     auto const x_dir_doc = machine_axis_direction(params.swap_xy, params.invert_x, params.invert_y, true);
     auto const y_dir_doc = machine_axis_direction(params.swap_xy, params.invert_x, params.invert_y, false);
@@ -2690,14 +2720,26 @@ void GrblControlPanel::build_machine_axis_overlay(SPDesktop *desktop, Inkscape::
     append_axis_arrow(axis_pv, origin_dt, x_end_dt, 12.0, 5.0);
     append_axis_arrow(axis_pv, origin_dt, y_end_dt, 12.0, 5.0);
     _plot_preview_machine_axis_overlay = make_canvasitem<CanvasItemBpath>(desktop->getCanvasTemp(), axis_pv, true);
-    configure_preview_overlay(*_plot_preview_machine_axis_overlay, 0x00aa55ee, 2.0);
+    configure_preview_overlay(*_plot_preview_machine_axis_overlay, k_machine_bed_stroke, 2.4);
+    _plot_preview_machine_axis_overlay->set_outline(k_machine_bed_outline);
+    _plot_preview_machine_axis_overlay->set_outline_width(1.0);
 
-    _plot_preview_axis_origin_label = make_preview_axis_label(desktop, origin_dt + Geom::Point(8.0, -8.0), _("机器原点"),
-                                                              0x003344dd);
-    _plot_preview_axis_x_label = make_preview_axis_label(desktop, x_end_dt + Geom::Point(8.0, -8.0), _("机器 X+"),
-                                                         0x005522dd);
-    _plot_preview_axis_y_label = make_preview_axis_label(desktop, y_end_dt + Geom::Point(8.0, -8.0), _("机器 Y+"),
-                                                         0x225500dd);
+    _plot_preview_axis_origin_label = make_preview_axis_label(desktop, origin_dt, _("机器原点"), k_machine_axis_bg,
+                                                              Geom::Point(0.0, 0.0), Geom::Point(12.0, 34.0));
+
+    Geom::Point const x_anchor(x_dir_doc[Geom::X] < -0.5 ? 1.0 : 0.0,
+                               std::abs(x_dir_doc[Geom::Y]) > 0.5 ? (x_dir_doc[Geom::Y] < 0.0 ? 1.0 : 0.0) : 0.5);
+    Geom::Point const x_adjust(x_dir_doc[Geom::X] < -0.5 ? -12.0 : (x_dir_doc[Geom::X] > 0.5 ? 12.0 : 0.0),
+                               x_dir_doc[Geom::Y] < -0.5 ? -12.0 : (x_dir_doc[Geom::Y] > 0.5 ? 12.0 : 0.0));
+    _plot_preview_axis_x_label = make_preview_axis_label(desktop, x_end_dt, _("机器 X+"), k_machine_axis_bg, x_anchor,
+                                                         x_adjust);
+
+    Geom::Point const y_anchor(y_dir_doc[Geom::X] < -0.5 ? 1.0 : (y_dir_doc[Geom::X] > 0.5 ? 0.0 : 0.5),
+                               y_dir_doc[Geom::Y] < -0.5 ? 1.0 : 0.0);
+    Geom::Point const y_adjust(y_dir_doc[Geom::X] < -0.5 ? -12.0 : (y_dir_doc[Geom::X] > 0.5 ? 12.0 : 0.0),
+                               y_dir_doc[Geom::Y] < -0.5 ? -12.0 : 12.0);
+    _plot_preview_axis_y_label = make_preview_axis_label(desktop, y_end_dt, _("机器 Y+"), k_machine_axis_bg, y_anchor,
+                                                         y_adjust);
 }
 
 void GrblControlPanel::sync_plot_preview_overlay()
