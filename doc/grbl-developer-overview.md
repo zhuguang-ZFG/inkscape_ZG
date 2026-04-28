@@ -74,6 +74,10 @@ GrblExportContext ←  desktop、selection、limit-to-current-layer、cancel、�
 
 ## 9. 下一步文档缺口（未在本页展开）
 
-- 控制面板操作流程（开发视角）与典型故障对照 `grbl_error_to_user_message` 的排障说明。
+- 控制面板操作流程（开发视角）的细化说明。
+
+## 10. 常见错误排障
+
+- GRBL 主机侧常见错误、含义与建议动作，见 `doc/grbl-troubleshooting.md`。
 
 更多通用编译与贡献说明见 `doc/building/readme.md` 与仓库根目录 `CONTRIBUTING.md`。
