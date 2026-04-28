@@ -35,6 +35,7 @@ struct GrblPanelSenderContext {
     std::function<void(Glib::ustring const &, bool)> post_status;
     std::function<void()> post_not_connected_status;
     std::function<void(std::string const &)> post_gcode_stream_result;
+    std::function<bool()> should_defer_motor_disable_cleanup;
     std::function<void()> refresh_plot_feedback_after_gcode_change;
     std::function<void(std::unique_lock<std::mutex> &)> finish_worker;
     std::function<void(std::function<void()>)> with_plot_waits;

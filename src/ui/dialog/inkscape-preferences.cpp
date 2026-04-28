@@ -2768,7 +2768,6 @@ void InkscapePreferences::initPageIO()
     }
     bed_preset_labels.emplace_back(_("Custom"));
     bed_preset_values.emplace_back("custom");
-    auto *prefs = Inkscape::Preferences::get();
     auto bed_preset = prefs->getString("/options/grbl/machine-bed-preset", "");
     auto bed_width = prefs->getDoubleLimited("/options/grbl/machine-bed-width-mm", 210.0, 1.0, 2000.0);
     auto bed_depth = prefs->getDoubleLimited("/options/grbl/machine-bed-depth-mm", 297.0, 1.0, 2000.0);

@@ -17,6 +17,7 @@
 #include <glibmm/ustring.h>
 #include <gtkmm/messagedialog.h>
 
+#include "axidraw/device/grbl-client.h"
 #include "axidraw/device/grbl-link.h"
 #include "axidraw/device/serial-port.h"
 #include "axidraw/pipeline/grbl-export.h"
@@ -29,6 +30,7 @@ namespace {
 constexpr int k_gcode_send_progress_min_interval_ms = 350;
 constexpr std::size_t k_gcode_send_progress_line_stride = 80;
 constexpr std::size_t k_max_gcode_stream_lines = 200000;
+constexpr auto k_motor_disable_gcode = "MD";
 
 void prepare_stream_link(Inkscape::Axidraw::GrblLink *link)
 {
@@ -143,6 +145,15 @@ void post_gcode_send_completion(std::function<void(Glib::ustring const &, bool)>
     } else {
         post_status(Glib::ustring::compose(_("Sent %1 lines of G-code."), static_cast<guint64>(sent)), false);
     }
+}
+
+bool send_motor_disable_if_possible(Inkscape::Axidraw::GrblLink *link, std::string &err_out)
+{
+    if (!(link && link->is_open())) {
+        err_out = _("Serial port is disconnected.");
+        return false;
+    }
+    return link->send_line_wait_ok(k_motor_disable_gcode, err_out);
 }
 
 Inkscape::Axidraw::GrblExportContext make_direct_send_context(SPDesktop *desktop, Inkscape::Selection *selection,
@@ -263,7 +274,18 @@ void GrblPanelSender::run_direct_send_worker(GrblPanelSenderContext const &conte
         std::size_t strokes = 0;
         Inkscape::Axidraw::GrblPlotStats stats{};
         if (!Inkscape::Axidraw::export_paths_to_grbl(*serial, doc, params, ctx, err, &strokes, &stats)) {
+            if (err != Inkscape::Axidraw::grbl_error_user_cancelled() &&
+                !(context.should_defer_motor_disable_cleanup && context.should_defer_motor_disable_cleanup())) {
+                std::string cleanup_err;
+                send_motor_disable_if_possible(context.link, cleanup_err);
+            }
             context.post_gcode_stream_result(err);
+            return;
+        }
+
+        std::string cleanup_err;
+        if (!send_motor_disable_if_possible(context.link, cleanup_err)) {
+            context.post_gcode_stream_result(cleanup_err);
             return;
         }
 
@@ -320,12 +342,27 @@ void GrblPanelSender::run_editor_gcode_send_worker(GrblPanelSenderContext const 
         });
 
         if (write_failed) {
+            if (err != Inkscape::Axidraw::grbl_error_user_cancelled() &&
+                !(context.should_defer_motor_disable_cleanup && context.should_defer_motor_disable_cleanup())) {
+                std::string cleanup_err;
+                send_motor_disable_if_possible(link, cleanup_err);
+            }
             context.post_gcode_stream_result(err);
             return;
         }
         if (!err.empty()) {
+            if (err != Inkscape::Axidraw::grbl_error_user_cancelled() &&
+                !(context.should_defer_motor_disable_cleanup && context.should_defer_motor_disable_cleanup())) {
+                std::string cleanup_err;
+                send_motor_disable_if_possible(link, cleanup_err);
+            }
             context.post_gcode_stream_result(err);
         } else {
+            std::string cleanup_err;
+            if (!send_motor_disable_if_possible(link, cleanup_err)) {
+                context.post_gcode_stream_result(cleanup_err);
+                return;
+            }
             post_gcode_send_completion(context.post_status, send_from_cursor, editor_line_1, sent);
         }
     });

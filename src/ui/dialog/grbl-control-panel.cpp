@@ -104,6 +104,7 @@ using Inkscape::choose_file_save;
 namespace {
 
 constexpr auto k_default_end_gcode = "G0 X0 Y0";
+constexpr auto k_motor_disable_gcode = "MD";
 
 Glib::ustring build_bed_preset_label(std::string const &id, double const width_mm, double const depth_mm)
 {
@@ -1512,6 +1513,7 @@ GrblPanelSenderContext GrblControlPanel::make_sender_context()
         .post_status = [this](Glib::ustring const &text, bool is_error) { post_status(text, is_error); },
         .post_not_connected_status = [this] { post_not_connected_status(); },
         .post_gcode_stream_result = [this](std::string const &err) { post_gcode_stream_result(err); },
+        .should_defer_motor_disable_cleanup = [this] { return _cancel_return_to_origin_pending; },
         .refresh_plot_feedback_after_gcode_change = [this] { refresh_plot_feedback_after_gcode_change(); },
         .finish_worker = [this](std::unique_lock<std::mutex> &lock) { finish_gcode_stream_worker(lock); },
         .with_plot_waits = [this](std::function<void()> work) { with_grbl_plot_waits(std::move(work)); },
@@ -2359,6 +2361,9 @@ void GrblControlPanel::return_to_work_origin_after_cancel()
             if (!_link->send_line_wait_ok(line, e)) {
                 return;
             }
+        }
+        if (!_link->send_line_wait_ok(k_motor_disable_gcode, e)) {
+            return;
         }
         if (work_origin.refresh_preview) {
             request_plot_feedback_for_trigger(GrblPlotFeedbackTrigger::work_origin_changed);
