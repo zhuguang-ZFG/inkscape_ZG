@@ -17,6 +17,7 @@ For user-facing documentation, please refer to the [Inkscape website](https://in
 - [GRBL preferences reference (ZH)](./grbl-preferences-reference.md) — `/options/grbl/*` to `GrblExportParams` mapping.
 - [GRBL CLI export guide (ZH)](./grbl-cli-export.md) — `--export-grbl-gcode` usage and examples.
 - [GRBL troubleshooting guide (ZH)](./grbl-troubleshooting.md) — common errors and diagnosis actions.
+- [GRBL control panel workflow (ZH)](./grbl-control-panel-workflow.md) — connection/sync/send/cancel flow map.
 
 
 
