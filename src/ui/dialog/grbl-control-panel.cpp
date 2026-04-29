@@ -2674,28 +2674,33 @@ bool GrblControlPanel::build_machine_bed_overlay(SPDocument *doc, SPDesktop *des
 
     auto const bed_origin_dt = Geom::Point(0.0, 0.0) * affine;
     _plot_preview_machine_bed_info_label = make_preview_axis_label(
-        desktop, bed_origin_dt + Geom::Point(10.0, 12.0),
+        desktop, bed_origin_dt,
         build_machine_bed_info_label_text(_bed_width_spin.get_value(), _bed_depth_spin.get_value(), params.plot_anchor),
-        k_machine_label_bg);
+        k_machine_label_bg, Geom::Point(0.0, 0.0), Geom::Point(14.0, 14.0));
 
     auto const anchor_doc = get_plot_anchor_overlay_position(params.plot_anchor, bed_w_doc, bed_h_doc);
     auto anchor_dt = anchor_doc * affine;
-    if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::LowerLeft) {
-        anchor_dt += Geom::Point(10.0, -12.0);
-    } else if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::LowerRight) {
-        anchor_dt += Geom::Point(-84.0, -12.0);
-    } else if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::UpperLeft) {
-        anchor_dt += Geom::Point(10.0, 28.0);
-    } else if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::UpperRight) {
-        anchor_dt += Geom::Point(-84.0, 28.0);
-    } else if (params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::Center) {
-        anchor_dt += Geom::Point(-36.0, -8.0);
-    } else {
-        anchor_dt += Geom::Point(10.0, 34.0);
-    }
     _plot_preview_machine_anchor_label = make_preview_axis_label(
         desktop, anchor_dt, Glib::ustring::compose(_("锚点 %1"), build_plot_anchor_overlay_text(params.plot_anchor)),
-        k_machine_anchor_bg);
+        k_machine_anchor_bg,
+        params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::LowerRight
+            ? Geom::Point(1.0, 1.0)
+            : params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::UpperRight
+                  ? Geom::Point(1.0, 0.0)
+                  : params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::Center
+                        ? Geom::Point(0.5, 0.5)
+                        : params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::LowerLeft
+                              ? Geom::Point(0.0, 1.0)
+                              : Geom::Point(0.0, 0.0),
+        params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::LowerRight
+            ? Geom::Point(-14.0, -14.0)
+            : params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::UpperRight
+                  ? Geom::Point(-14.0, 14.0)
+                  : params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::Center
+                        ? Geom::Point(0.0, 0.0)
+                        : params.plot_anchor == Inkscape::Axidraw::GrblPlotAnchorPosition::LowerLeft
+                              ? Geom::Point(14.0, -14.0)
+                              : Geom::Point(14.0, 14.0));
     return true;
 }
 
@@ -2725,19 +2730,19 @@ void GrblControlPanel::build_machine_axis_overlay(SPDesktop *desktop, Inkscape::
     _plot_preview_machine_axis_overlay->set_outline_width(1.0);
 
     _plot_preview_axis_origin_label = make_preview_axis_label(desktop, origin_dt, _("机器原点"), k_machine_axis_bg,
-                                                              Geom::Point(0.0, 0.0), Geom::Point(12.0, 34.0));
+                                                              Geom::Point(0.0, 0.0), Geom::Point(14.0, 74.0));
 
     Geom::Point const x_anchor(x_dir_doc[Geom::X] < -0.5 ? 1.0 : 0.0,
                                std::abs(x_dir_doc[Geom::Y]) > 0.5 ? (x_dir_doc[Geom::Y] < 0.0 ? 1.0 : 0.0) : 0.5);
-    Geom::Point const x_adjust(x_dir_doc[Geom::X] < -0.5 ? -12.0 : (x_dir_doc[Geom::X] > 0.5 ? 12.0 : 0.0),
-                               x_dir_doc[Geom::Y] < -0.5 ? -12.0 : (x_dir_doc[Geom::Y] > 0.5 ? 12.0 : 0.0));
+    Geom::Point const x_adjust(x_dir_doc[Geom::X] < -0.5 ? -14.0 : (x_dir_doc[Geom::X] > 0.5 ? 14.0 : 0.0),
+                               std::abs(x_dir_doc[Geom::Y]) > 0.5 ? (x_dir_doc[Geom::Y] < 0.0 ? -14.0 : 14.0) : 18.0);
     _plot_preview_axis_x_label = make_preview_axis_label(desktop, x_end_dt, _("机器 X+"), k_machine_axis_bg, x_anchor,
                                                          x_adjust);
 
     Geom::Point const y_anchor(y_dir_doc[Geom::X] < -0.5 ? 1.0 : (y_dir_doc[Geom::X] > 0.5 ? 0.0 : 0.5),
                                y_dir_doc[Geom::Y] < -0.5 ? 1.0 : 0.0);
-    Geom::Point const y_adjust(y_dir_doc[Geom::X] < -0.5 ? -12.0 : (y_dir_doc[Geom::X] > 0.5 ? 12.0 : 0.0),
-                               y_dir_doc[Geom::Y] < -0.5 ? -12.0 : 12.0);
+    Geom::Point const y_adjust(std::abs(y_dir_doc[Geom::X]) > 0.5 ? (y_dir_doc[Geom::X] < 0.0 ? -14.0 : 14.0) : 18.0,
+                               y_dir_doc[Geom::Y] < -0.5 ? -14.0 : 14.0);
     _plot_preview_axis_y_label = make_preview_axis_label(desktop, y_end_dt, _("机器 Y+"), k_machine_axis_bg, y_anchor,
                                                          y_adjust);
 }
