@@ -10,7 +10,6 @@ if(WIN32)
     ${MINGW_BIN}/LIBEAY32.dll
     ${MINGW_BIN}/SSLEAY32.dll
     ${MINGW_BIN}/libimagequant.dll
-    ${MINGW_BIN}/lib2geom.dll
     ${MINGW_BIN}/libLerc.dll
     ${MINGW_BIN}/libaom.dll
     ${MINGW_BIN}/libaspell-[0-9]*.dll
@@ -159,6 +158,17 @@ if(WIN32)
     ${MINGW_BIN}/vulkan-[0-9]*.dll
     ${MINGW_BIN}/zlib1.dll)
   INSTALL(FILES ${MINGW_LIBS} DESTINATION bin)
+  set(LIB2GEOM_RUNTIME "")
+  if(EXISTS "${MINGW_BIN}/lib2geom.dll")
+    set(LIB2GEOM_RUNTIME "${MINGW_BIN}/lib2geom.dll")
+  elseif(EXISTS "${CMAKE_BINARY_DIR}/bin/lib2geom.dll")
+    set(LIB2GEOM_RUNTIME "${CMAKE_BINARY_DIR}/bin/lib2geom.dll")
+  endif()
+  if(LIB2GEOM_RUNTIME)
+    install(FILES ${LIB2GEOM_RUNTIME}
+      DESTINATION bin
+      COMPONENT inkscape)
+  endif()
   # There are differences for 64-Bit and 32-Bit build environments.
   if(HAVE_MINGW64)
     if($ENV{MSYSTEM} STREQUAL "CLANGARM64" OR $ENV{MSYSTEM} STREQUAL "CLANG64")
