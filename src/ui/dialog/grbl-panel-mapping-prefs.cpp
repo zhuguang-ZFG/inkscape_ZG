@@ -183,11 +183,9 @@ GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs
     values.bed_preset = prefs.getString(k_pref_bed_preset, "");
     if (values.bed_preset.empty()) {
         values.bed_preset = infer_grbl_bed_preset_id(values.bed_width, values.bed_depth);
-        if (values.bed_preset == "custom" &&
-            nearly_equal_mm(values.bed_width, 300.0) && nearly_equal_mm(values.bed_depth, 200.0)) {
-            values.bed_preset = k_default_bed_preset;
-            lookup_grbl_bed_preset_dimensions(values.bed_preset, values.bed_width, values.bed_depth);
-        }
+        normalize_grbl_bed_preset_defaults(values);
+    } else if (values.bed_preset == "custom") {
+        normalize_grbl_bed_preset_defaults(values);
     } else if (values.bed_preset != "custom") {
         double preset_width = 0.0;
         double preset_depth = 0.0;

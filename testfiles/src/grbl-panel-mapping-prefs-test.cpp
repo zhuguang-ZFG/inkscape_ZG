@@ -7,6 +7,7 @@
 using Inkscape::UI::Dialog::GrblPanelMappingPrefs;
 using Inkscape::UI::Dialog::apply_grbl_tool_change_mode_id;
 using Inkscape::UI::Dialog::get_grbl_tool_change_mode_id;
+using Inkscape::UI::Dialog::normalize_grbl_bed_preset_defaults;
 
 TEST(GrblPanelMappingPrefsTest, ToolChangeModeIdMatchesStoredFlags)
 {
@@ -39,4 +40,18 @@ TEST(GrblPanelMappingPrefsTest, ApplyingModeIdUpdatesFlagsConsistently)
     EXPECT_FALSE(prefs.manual_pen_change);
     EXPECT_FALSE(prefs.tool_change_m6);
     EXPECT_FALSE(prefs.tool_change_point);
+}
+
+TEST(GrblPanelMappingPrefsTest, LegacyCustom200By200DefaultsBackToA4)
+{
+    GrblPanelMappingPrefs prefs;
+    prefs.bed_preset = "custom";
+    prefs.bed_width = 200.0;
+    prefs.bed_depth = 200.0;
+
+    normalize_grbl_bed_preset_defaults(prefs);
+
+    EXPECT_EQ(prefs.bed_preset, "A4");
+    EXPECT_DOUBLE_EQ(prefs.bed_width, 210.0);
+    EXPECT_DOUBLE_EQ(prefs.bed_depth, 297.0);
 }

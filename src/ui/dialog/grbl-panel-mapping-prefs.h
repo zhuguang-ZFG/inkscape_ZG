@@ -5,6 +5,7 @@
 #ifndef INKSCAPE_UI_DIALOG_GRBL_PANEL_MAPPING_PREFS_H
 #define INKSCAPE_UI_DIALOG_GRBL_PANEL_MAPPING_PREFS_H
 
+#include <cmath>
 #include <span>
 #include <string>
 
@@ -75,6 +76,27 @@ void apply_grbl_tool_change_mode_id(std::string const &mode_id, GrblPanelMapping
 std::span<GrblBedPresetInfo const> get_grbl_bed_preset_definitions();
 bool lookup_grbl_bed_preset_dimensions(std::string const &id, double &width_mm, double &depth_mm);
 std::string infer_grbl_bed_preset_id(double width_mm, double depth_mm);
+inline void normalize_grbl_bed_preset_defaults(GrblPanelMappingPrefs &prefs)
+{
+    if (prefs.bed_preset != "custom") {
+        return;
+    }
+
+    auto const nearly_equal_mm = [](double const a, double const b, double const epsilon = 0.05) {
+        return std::abs(a - b) <= epsilon;
+    };
+
+    bool const looks_like_legacy_default =
+        (nearly_equal_mm(prefs.bed_width, 300.0) && nearly_equal_mm(prefs.bed_depth, 200.0)) ||
+        (nearly_equal_mm(prefs.bed_width, 200.0) && nearly_equal_mm(prefs.bed_depth, 200.0));
+    if (!looks_like_legacy_default) {
+        return;
+    }
+
+    prefs.bed_preset = "A4";
+    prefs.bed_width = 210.0;
+    prefs.bed_depth = 297.0;
+}
 GrblPanelMappingPrefs load_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs);
 void save_grbl_panel_mapping_prefs(Inkscape::Preferences &prefs, GrblPanelMappingPrefs const &values);
 
