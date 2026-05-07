@@ -79,7 +79,7 @@ Glib::ustring build_grbl_firmware_sync_status(GrblFirmwareSnapshot const &snapsh
             notes.emplace_back(Glib::ustring::compose(_("已同步床面深度 Y=%1 mm"), snapshot.y_travel_mm));
         }
     } else {
-        notes.emplace_back(_("未从固件读取到 $130 / $131 行程参数，因此没有同步页面尺寸。"));
+        notes.emplace_back(_("未从参数中读到 $130 / $131 行程参数，因此没有同步页面尺寸。"));
     }
     if (page_synced) {
         notes.emplace_back(Glib::ustring::compose(_("已将当前页面尺寸同步为 %1 x %2 mm"),
@@ -88,12 +88,16 @@ Glib::ustring build_grbl_firmware_sync_status(GrblFirmwareSnapshot const &snapsh
     if (unit_synced) {
         notes.emplace_back(_("已将文档单位同步为 mm"));
     }
+
+    auto const summary = snapshot.imported_from_file
+        ? Glib::ustring(_("已从参数文件导入绘图机参数。"))
+        : Glib::ustring(_("已读取固件参数。"));
     if (notes.empty()) {
-        return _("已读取固件参数。");
+        return summary;
     }
 
     std::ostringstream msg;
-    msg << _("已读取固件参数。");
+    msg << summary.raw();
     for (auto const &note : notes) {
         msg << "\n" << note.raw();
     }

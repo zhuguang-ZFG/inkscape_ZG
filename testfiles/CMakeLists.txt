@@ -286,6 +286,9 @@ add_unit_test(grbl-panel-document-layout-test TEST_SOURCE "grbl-panel-document-l
 add_unit_test(grbl-panel-firmware-sync-state-test TEST_SOURCE "grbl-panel-firmware-sync-state-test.cpp"
                                                   SOURCES "ui/dialog/grbl-panel-firmware-sync-state.cpp"
                                        EXTRA_LIBS GLibmm::GLibmm)
+add_unit_test(grbl-panel-firmware-sync-import-test TEST_SOURCE "grbl-panel-firmware-sync-import-test.cpp"
+                                                   SOURCES "ui/dialog/grbl-panel-firmware-sync-state.cpp"
+                                        EXTRA_LIBS GLibmm::GLibmm)
 add_unit_test(grbl-panel-mapping-prefs-test TEST_SOURCE "grbl-panel-mapping-prefs-test.cpp"
                                             SOURCES "ui/dialog/grbl-panel-mapping-mode.cpp")
 add_unit_test(grbl-panel-mapping-state-test TEST_SOURCE "grbl-panel-mapping-state-test.cpp"
