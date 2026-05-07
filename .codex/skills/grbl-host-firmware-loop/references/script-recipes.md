@@ -53,6 +53,7 @@ powershell -ExecutionPolicy Bypass -File .codex\skills\grbl-host-firmware-loop\s
 ## 4. Serial smoke
 
 This sends a blank wake-up and then `$$`, captures the reply, and writes a log file.
+Use `-Summary` when you want a compact report with version, machine, pen mode, and key `$` values.
 
 Dry run:
 
@@ -66,8 +67,15 @@ Run:
 powershell -ExecutionPolicy Bypass -File .codex\skills\grbl-host-firmware-loop\scripts\serial-smoke.ps1 -Port COM3
 ```
 
+Run with summary:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .codex\skills\grbl-host-firmware-loop\scripts\serial-smoke.ps1 -Port COM3 -Summary
+```
+
 ## Notes
 
 - `serial-smoke.ps1` requires Python with `pyserial`.
 - `upload-firmware.ps1` does not pre-build separately; it relies on `platformio run -t upload`.
 - Default upload port is `COM3`, matching the current project notes. Override it when needed.
+- Never run upload and smoke in parallel on the same serial port. Always wait for upload to finish before starting smoke.

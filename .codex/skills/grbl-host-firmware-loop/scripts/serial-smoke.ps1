@@ -3,6 +3,7 @@ param(
     [int]$Baud = 115200,
     [int]$TimeoutMs = 1500,
     [string]$LogPath,
+    [switch]$Summary,
     [switch]$DryRun
 )
 
@@ -65,6 +66,43 @@ if ($DryRun) {
     exit 0
 }
 
-@"
+${text} = @"
 $script
 "@ | python -
+
+if (-not $Summary) {
+    return
+}
+
+$lines = ($text -split "`r?`n") | Where-Object { $_ -ne "" }
+$versionLine = $lines | Where-Object { $_ -match "Grbl_ESP32 Ver|^Grbl " } | Select-Object -First 1
+$machineLine = $lines | Where-Object { $_ -match "Using machine:" } | Select-Object -First 1
+$penModeLine = $lines | Where-Object { $_ -match "Pen control via" } | Select-Object -First 1
+
+$settings = @{}
+foreach ($line in $lines) {
+    if ($line -match '^\$(\d+)=([^\r\n]+)$') {
+        $settings[$matches[1]] = $matches[2]
+    }
+}
+
+$summaryLines = @()
+$summaryLines += "=== SERIAL SMOKE SUMMARY ==="
+$summaryLines += "Port: $Port"
+$summaryLines += "LogPath: $LogPath"
+if ($versionLine) { $summaryLines += "Version: $versionLine" }
+if ($machineLine) { $summaryLines += "Machine: $machineLine" }
+if ($penModeLine) { $summaryLines += "PenMode: $penModeLine" }
+
+foreach ($key in @("1", "80", "81", "112", "122")) {
+    if ($settings.ContainsKey($key)) {
+        $summaryLines += ('$' + $key + '=' + $settings[$key])
+    }
+}
+
+if ($settings.Count -eq 0) {
+    $summaryLines += "No settings parsed from response."
+}
+
+$summaryLines += "=== END SUMMARY ==="
+Write-Output ($summaryLines -join [Environment]::NewLine)

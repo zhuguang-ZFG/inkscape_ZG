@@ -51,6 +51,12 @@ Typical upload command:
 
 - `platformio run -e release -t upload --upload-port COM3`
 
+Important:
+
+- Do not run upload and serial smoke in parallel on the same port.
+- Treat any `PermissionError(13)` during upload as suspicious if another serial action was running at the same time.
+- Prefer this sequence: build -> upload -> smoke -> optional motion checks.
+
 After upload, prefer a short explicit validation sequence, for example:
 
 - `$$` to confirm persistent settings
