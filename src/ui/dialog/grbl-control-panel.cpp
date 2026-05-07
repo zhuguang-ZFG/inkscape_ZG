@@ -684,7 +684,8 @@ Glib::ustring build_imported_firmware_settings_preview(GrblFirmwareSnapshot cons
             text << "\n" << line.raw();
         }
     }
-    text << "\n\n" << _("你可以只导入到当前面板，也可以直接写入当前已连接的控制器。").raw();
+    text << "\n\n" << _("未连接控制器时，只能导入到当前面板。").raw();
+    text << "\n" << _("已连接时，你也可以直接写入当前控制器。").raw();
     return Glib::ustring(text.str());
 }
 
@@ -1291,6 +1292,10 @@ bool GrblControlPanel::apply_imported_firmware_settings_to_controller(GrblFirmwa
 {
     if (snapshot.settings.empty()) {
         post_status(_("这份参数文件里没有可写入控制器的参数。"), true);
+        return false;
+    }
+    if (!is_connect_active() || !(_link && _link->is_open())) {
+        post_status(_("当前没有已连接的控制器；这次只导入到了面板，没有写入机器。"), true);
         return false;
     }
 
