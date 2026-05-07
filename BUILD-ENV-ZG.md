@@ -53,6 +53,54 @@ start-zg-dev-shell.cmd
 - The build is pinned to the MSYS2 `UCRT64` toolchain.
 - `compile_commands.json` is enabled during configure for editor tooling.
 
+## Windows installer packaging lessons
+
+### Recommended packaging command
+
+Use the repo root script instead of calling raw `cmake`/`ninja` from a plain PowerShell session:
+
+```bat
+build-zg-inkscape.cmd --reconfigure --configure-only
+build-zg-inkscape.cmd dist-win-exe
+```
+
+This avoids missing `MSYS2/UCRT64` environment variables during configure.
+
+### Known DLL packaging pitfall
+
+There was a real packaging bug on 2026-04-29 where the generated NSIS installer started with:
+
+- `找不到 lib2geom.dll`
+
+Root cause:
+
+- `CMakeScripts/InstallMSYS2.cmake` originally assumed `lib2geom.dll` always lived at `C:\msys64\ucrt64\bin\lib2geom.dll`
+- on this machine, the active build was `WITH_INTERNAL_2GEOM=OFF`, but the runtime DLL actually existed at `inkscape\build-zg\bin\lib2geom.dll`
+- as a result, the installer staging directory contained most runtime DLLs, but still missed `lib2geom.dll`
+
+Final fix already committed:
+
+- `CMakeScripts/InstallMSYS2.cmake` now resolves `lib2geom.dll` from:
+  - `C:\msys64\ucrt64\bin\lib2geom.dll`, if present
+  - otherwise `inkscape\build-zg\bin\lib2geom.dll`
+- and installs it explicitly into the `inkscape` component
+
+### Fast verification before handing out an installer
+
+Before saying a Windows installer is good, check the NSIS staging directory, not only `install_dir`:
+
+```powershell
+Test-Path "inkscape\build-zg\_CPack_Packages\win64\NSIS\<package>\inkscape\bin\lib2geom.dll"
+Test-Path "inkscape\build-zg\_CPack_Packages\win64\NSIS\<package>\inkscape\bin\libinkscape_base.dll"
+Test-Path "inkscape\build-zg\_CPack_Packages\win64\NSIS\<package>\inkscape\bin\libgtk-4-1.dll"
+```
+
+Important:
+
+- `install_dir\bin` has the post-install tree for the local build
+- but the final NSIS installer only contains what was copied into `_CPack_Packages\win64\NSIS\...`
+- if `install_dir` has a DLL but `_CPack_Packages` does not, the installer will still be broken
+
 ## GRBL path optimization notes
 
 - Current GRBL optimization work is in [inkscape/src/axidraw/pipeline/grbl-export.cpp](inkscape/src/axidraw/pipeline/grbl-export.cpp).
