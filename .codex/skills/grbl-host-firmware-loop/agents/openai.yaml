@@ -1,0 +1,4 @@
+interface:
+  display_name: "GRBL Host Firmware Loop"
+  short_description: "Host-firmware GRBL debug and verification"
+  default_prompt: "Use $grbl-host-firmware-loop to debug and verify a change across Inkscape ZG and the local Grbl_Esp32 firmware checkout."
