@@ -71,6 +71,19 @@ if errorlevel 1 exit /b %ERRORLEVEL%
 if "%CONFIGURE_ONLY%"=="1" exit /b 0
 
 :build
+set "BASE_DLL=%BUILD_DIR%\bin\libinkscape_base.dll"
+set "APP_EXE=%BUILD_DIR%\bin\inkscape.exe"
+
+if exist "%BASE_DLL%" (
+  if exist "%BASE_DLL%.prelink" del /f /q "%BASE_DLL%.prelink" >nul 2>nul
+  move /y "%BASE_DLL%" "%BASE_DLL%.prelink" >nul 2>nul
+)
+
+if exist "%APP_EXE%" (
+  if exist "%APP_EXE%.prelink" del /f /q "%APP_EXE%.prelink" >nul 2>nul
+  move /y "%APP_EXE%" "%APP_EXE%.prelink" >nul 2>nul
+)
+
 if "%~1"=="" (
   "%NINJA_EXE%" -C "%BUILD_DIR%" inkscape
 ) else (

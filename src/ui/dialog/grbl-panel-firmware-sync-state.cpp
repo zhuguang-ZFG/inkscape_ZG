@@ -2,12 +2,28 @@
 
 #include "grbl-panel-firmware-sync-state.h"
 
+#include <cctype>
 #include <sstream>
+#include <string>
 #include <vector>
 
 #include <glibmm/i18n.h>
 
 namespace Inkscape::UI::Dialog {
+namespace {
+
+std::string trim_ascii_whitespace(std::string text)
+{
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    return text;
+}
+
+} // namespace
 
 bool can_start_grbl_firmware_sync(GrblRuntimePhase const phase)
 {
@@ -79,7 +95,7 @@ Glib::ustring build_grbl_firmware_sync_status(GrblFirmwareSnapshot const &snapsh
             notes.emplace_back(Glib::ustring::compose(_("已同步床面深度 Y=%1 mm"), snapshot.y_travel_mm));
         }
     } else {
-        notes.emplace_back(_("未从固件读取到 $130 / $131 行程参数，因此没有同步页面尺寸。"));
+        notes.emplace_back(_("未从参数中读到 $130 / $131 行程参数，因此没有同步页面尺寸。"));
     }
     if (page_synced) {
         notes.emplace_back(Glib::ustring::compose(_("已将当前页面尺寸同步为 %1 x %2 mm"),
@@ -88,12 +104,16 @@ Glib::ustring build_grbl_firmware_sync_status(GrblFirmwareSnapshot const &snapsh
     if (unit_synced) {
         notes.emplace_back(_("已将文档单位同步为 mm"));
     }
+
+    auto const summary = snapshot.imported_from_file
+        ? Glib::ustring(_("已从参数文件导入绘图机参数。"))
+        : Glib::ustring(_("已读取固件参数。"));
     if (notes.empty()) {
-        return _("已读取固件参数。");
+        return summary;
     }
 
     std::ostringstream msg;
-    msg << _("已读取固件参数。");
+    msg << summary.raw();
     for (auto const &note : notes) {
         msg << "\n" << note.raw();
     }
@@ -108,6 +128,95 @@ GrblPanelFirmwareSyncUiPlan make_grbl_firmware_sync_ui_plan(GrblFirmwareSnapshot
     plan.schedule_plot_feedback_refresh = !apply_result.changed;
     plan.status = build_grbl_firmware_sync_status(snapshot, apply_result.page_synced, apply_result.unit_synced);
     return plan;
+}
+
+bool parse_grbl_properties_snapshot(std::string const &text, GrblFirmwareSnapshot &snapshot, Glib::ustring &error)
+{
+    snapshot = GrblFirmwareSnapshot{};
+    snapshot.imported_from_file = true;
+
+    std::istringstream input(text);
+    std::string line;
+    std::vector<std::string> setting_lines;
+    bool saw_setting = false;
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        auto trimmed = trim_ascii_whitespace(line);
+        if (trimmed.empty() || trimmed[0] == '#' || trimmed[0] == '!') {
+            continue;
+        }
+
+        std::string key_part = trimmed;
+        if (!key_part.empty() && key_part.front() == '$') {
+            key_part.erase(key_part.begin());
+        }
+
+        auto const eq = key_part.find('=');
+        if (eq == std::string::npos || eq == 0 || eq + 1 >= key_part.size()) {
+            continue;
+        }
+
+        auto const key = trim_ascii_whitespace(key_part.substr(0, eq));
+        auto const value = trim_ascii_whitespace(key_part.substr(eq + 1));
+        if (key.empty() || value.empty()) {
+            continue;
+        }
+
+        int code = 0;
+        try {
+            size_t idx = 0;
+            code = std::stoi(key, &idx);
+            if (idx != key.size()) {
+                continue;
+            }
+        } catch (...) {
+            continue;
+        }
+
+        saw_setting = true;
+        setting_lines.push_back("$" + std::to_string(code) + "=" + value);
+
+        try {
+            if (code == 3) {
+                size_t idx = 0;
+                int const parsed = std::stoi(value, &idx);
+                if (idx == value.size()) {
+                    snapshot.direction_mask = parsed;
+                    snapshot.has_direction_mask = true;
+                }
+            } else if (code == 130) {
+                size_t idx = 0;
+                double const parsed = std::stod(value, &idx);
+                if (idx == value.size()) {
+                    snapshot.x_travel_mm = parsed;
+                    snapshot.has_x_travel = true;
+                }
+            } else if (code == 131) {
+                size_t idx = 0;
+                double const parsed = std::stod(value, &idx);
+                if (idx == value.size()) {
+                    snapshot.y_travel_mm = parsed;
+                    snapshot.has_y_travel = true;
+                }
+            }
+        } catch (...) {
+        }
+    }
+
+    if (!saw_setting) {
+        error = _("所选文件里没有找到可识别的 GRBL 参数项。");
+        return false;
+    }
+
+    std::ostringstream out;
+    out << "[imported $$]\n";
+    for (auto const &entry : setting_lines) {
+        out << entry << "\n";
+    }
+    snapshot.display_text = out.str();
+    return true;
 }
 
 } // namespace Inkscape::UI::Dialog

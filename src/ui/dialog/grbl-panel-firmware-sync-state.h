@@ -5,6 +5,8 @@
 #ifndef INKSCAPE_UI_DIALOG_GRBL_PANEL_FIRMWARE_SYNC_STATE_H
 #define INKSCAPE_UI_DIALOG_GRBL_PANEL_FIRMWARE_SYNC_STATE_H
 
+#include <string>
+
 #include <glibmm/ustring.h>
 
 #include "ui/dialog/grbl-panel-firmware-sync.h"
@@ -50,6 +52,7 @@ GrblFirmwareMappingUpdate make_grbl_firmware_mapping_update(GrblFirmwareSnapshot
 Glib::ustring build_grbl_firmware_sync_status(GrblFirmwareSnapshot const &snapshot, bool page_synced, bool unit_synced);
 GrblPanelFirmwareSyncUiPlan make_grbl_firmware_sync_ui_plan(GrblFirmwareSnapshot const &snapshot,
                                                             GrblFirmwareSyncApplyResult const &apply_result);
+bool parse_grbl_properties_snapshot(std::string const &text, GrblFirmwareSnapshot &snapshot, Glib::ustring &error);
 
 } // namespace Inkscape::UI::Dialog
 

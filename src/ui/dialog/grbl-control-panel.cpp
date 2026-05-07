@@ -344,6 +344,7 @@ constexpr auto k_pref_tool_change_x = "/options/grbl/tool-change-x-mm";
 constexpr auto k_pref_tool_change_y = "/options/grbl/tool-change-y-mm";
 constexpr auto k_pref_start_gcode = "/options/grbl/start-gcode";
 constexpr auto k_pref_end_gcode = "/options/grbl/end-gcode";
+constexpr auto k_pref_import_grbl_props_dir = "/dialogs/grblcontrol/import_grbl_props_dir";
 
 void migrate_clip_to_machine_bed_default(Inkscape::Preferences *prefs)
 {
@@ -400,16 +401,6 @@ constexpr auto k_tool_change_mode_none = "none";
 constexpr auto k_tool_change_mode_manual = "manual";
 constexpr auto k_tool_change_mode_m6 = "m6";
 
-struct GrblFirmwareSnapshot {
-    bool has_direction_mask = false;
-    int direction_mask = 0;
-    bool has_x_travel = false;
-    double x_travel_mm = 0;
-    bool has_y_travel = false;
-    double y_travel_mm = 0;
-    Glib::ustring display_text;
-};
-
 } // namespace
 
 namespace Inkscape::UI::Dialog {
@@ -443,6 +434,7 @@ GrblControlPanel::GrblControlPanel()
     , _chk_send_from_cursor_line(_("仅从光标所在行向下发送(_C)"))
     , _chk_sync_page_to_bed(_("同步时把页面改成所选绘图范围（可恢复）"))
     , _btn_read_firmware(_("同步绘图机参数"))
+    , _btn_import_firmware_file(_("导入参数文件"))
     , _btn_read_radio_mode(_("读取模式"))
     , _btn_read_ip(_("读取 IP"))
     , _btn_apply_radio_mode(_("应用无线模式"))
@@ -657,6 +649,7 @@ void GrblControlPanel::refresh_runtime_ui_state()
 
     _btn_connect.set_sensitive(allow_interaction);
     _btn_read_firmware.set_sensitive(allow_interaction);
+    _btn_import_firmware_file.set_sensitive(allow_interaction);
     _radio_mode_combo.set_sensitive(allow_interaction);
     _radio_pwd.set_sensitive(allow_interaction);
     _chk_radio_restart.set_sensitive(allow_interaction);
@@ -1962,6 +1955,84 @@ void GrblControlPanel::on_read_firmware_settings()
     request_firmware_sync(GrblFirmwareSyncRequestOrigin::manual);
 }
 
+bool GrblControlPanel::import_firmware_snapshot_from_file(std::string const &path)
+{
+    std::string contents;
+    try {
+        contents = Glib::file_get_contents(path);
+    } catch (Glib::FileError const &e) {
+        post_status(e.what(), true);
+        return false;
+    }
+
+    GrblFirmwareSnapshot snapshot;
+    Glib::ustring parse_error;
+    if (!parse_grbl_properties_snapshot(contents, snapshot, parse_error)) {
+        post_status(parse_error, true);
+        return false;
+    }
+
+    set_firmware_info_text(snapshot.display_text);
+    auto const apply_result = apply_firmware_snapshot_to_ui(snapshot);
+    auto const ui_plan = make_grbl_firmware_sync_ui_plan(snapshot, apply_result);
+    if (ui_plan.save_mapping_preferences) {
+        save_mapping_preferences_from_ui(true);
+    }
+    if (ui_plan.schedule_plot_feedback_refresh) {
+        schedule_plot_feedback_refresh(true);
+    }
+    post_status(ui_plan.status, false);
+    return true;
+}
+
+void GrblControlPanel::on_import_firmware_settings_file()
+{
+    Glib::ustring blocked_reason;
+    if (is_runtime_busy()) {
+        if (!get_busy_reason(true, true, true, blocked_reason)) {
+            blocked_reason = _("当前面板忙碌中，暂时不能导入参数文件。");
+        }
+        post_status(blocked_reason, true);
+        return;
+    }
+
+    auto *win = get_dialog_parent_window("无法打开参数文件对话框（没有父窗口）。");
+    if (!win) {
+        return;
+    }
+
+    std::string folder;
+    Inkscape::UI::Dialog::get_start_directory(folder, k_pref_import_grbl_props_dir, true);
+    auto filters = Gio::ListStore<Gtk::FileFilter>::create();
+    auto props = Gtk::FileFilter::create();
+    props->set_name(_("GRBL 参数文件"));
+    props->add_suffix("properties");
+    props->add_suffix("txt");
+    filters->append(props);
+    auto all = Gtk::FileFilter::create();
+    all->set_name(_("所有文件"));
+    all->add_pattern("*");
+    filters->append(all);
+
+    Glib::RefPtr<Gio::File> const src = choose_file_open(_("导入 GRBL 参数文件"), win, filters, folder, _("打开"));
+    if (!src) {
+        return;
+    }
+
+    std::string const path = src->get_path();
+    if (path.empty()) {
+        post_status(_("无法读取文件（没有本地路径）。"), true);
+        return;
+    }
+    if (!import_firmware_snapshot_from_file(path)) {
+        return;
+    }
+
+    if (auto *prefs = Inkscape::Preferences::get()) {
+        prefs->setString(k_pref_import_grbl_props_dir, folder);
+    }
+}
+
 void GrblControlPanel::connect_toggle()
 {
     bool const want = _btn_connect.get_active();
@@ -2802,6 +2873,9 @@ void GrblControlPanel::build_ui()
     _btn_read_firmware.set_icon_name("document-properties-symbolic");
     _btn_read_firmware.set_tooltip_text(
         _("读取 $I / $G / $# / $$，并自动同步绘图机的方向反转；绘图范围尺寸改为由用户手动指定。"));
+    _btn_import_firmware_file.set_icon_name("document-open-symbolic");
+    _btn_import_firmware_file.set_tooltip_text(
+        _("从本地 .properties / .txt 参数快照导入 GRBL 设置，并同步到当前面板。不会直接写入控制器。"));
     _chk_sync_page_to_bed.set_halign(Gtk::Align::START);
     _chk_sync_page_to_bed.set_active(true);
     _chk_sync_page_to_bed.set_tooltip_text(
@@ -3181,7 +3255,6 @@ void GrblControlPanel::build_ui()
     Inkscape::UI::pack_start(_port_row, _port_lbl, false, false, 6);
     Inkscape::UI::pack_start(_port_row, _port_combo, true, true, 6);
     Inkscape::UI::pack_start(_port_row, _btn_refresh_ports, false, false, 0);
-    Inkscape::UI::pack_start(_port_row, _btn_read_firmware, false, false, 0);
 
     auto *frame_layout = Gtk::make_managed<Gtk::Frame>();
     frame_layout->set_label(_("页面、机器与恢复"));
@@ -3220,6 +3293,10 @@ void GrblControlPanel::build_ui()
     frame_serial->set_margin_top(0);
     auto *box_serial = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
     Inkscape::UI::pack_start(*box_serial, _port_row, false, false, 0);
+    auto *firmware_actions_row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    Inkscape::UI::pack_start(*firmware_actions_row, _btn_read_firmware, true, true, 0);
+    Inkscape::UI::pack_start(*firmware_actions_row, _btn_import_firmware_file, true, true, 0);
+    Inkscape::UI::pack_start(*box_serial, *firmware_actions_row, false, false, 0);
     auto *radio_row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
     auto *radio_lbl = Gtk::make_managed<Gtk::Label>(_("<b>无线与固件</b>"), Gtk::Align::START);
     radio_lbl->set_use_markup(true);
@@ -3328,6 +3405,7 @@ void GrblControlPanel::build_ui()
     _btn_connect.signal_toggled().connect(sigc::mem_fun(*this, &GrblControlPanel::connect_toggle));
     _btn_refresh_ports.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::refresh_port_list));
     _btn_read_firmware.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_read_firmware_settings));
+    _btn_import_firmware_file.signal_clicked().connect(sigc::mem_fun(*this, &GrblControlPanel::on_import_firmware_settings_file));
     _port_combo.signal_changed().connect(sigc::mem_fun(*this, &GrblControlPanel::on_port_combo_changed));
     connect_mapping_preference_signals();
     _btn_read_radio_mode.signal_clicked().connect([this] {

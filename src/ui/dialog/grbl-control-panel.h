@@ -99,6 +99,7 @@ private:
     void on_restore_page_size();
     void on_fill_gcode_from_document();
     void on_read_firmware_settings();
+    void on_import_firmware_settings_file();
     void on_load_gcode_from_file();
     void on_save_gcode_as();
     void on_cancel_gcode_stream();
@@ -143,6 +144,7 @@ private:
     void set_mapping_sync_suspended(bool suspended) noexcept;
     bool should_sync_page_to_bed_on_firmware_read() const;
     GrblFirmwareSyncApplyResult apply_firmware_snapshot_to_ui(GrblFirmwareSnapshot const &snapshot);
+    bool import_firmware_snapshot_from_file(std::string const &path);
 
     void refresh_port_list();
     void on_port_combo_changed();
@@ -260,6 +262,7 @@ private:
     Gtk::Label _machine_status;
     Gtk::ToggleButton _btn_connect;
     Gtk::Button _btn_read_firmware;
+    Gtk::Button _btn_import_firmware_file;
     Gtk::ComboBoxText _radio_mode_combo;
     Gtk::Entry _radio_pwd;
     Gtk::CheckButton _chk_radio_restart;

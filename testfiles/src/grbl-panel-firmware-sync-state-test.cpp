@@ -13,6 +13,7 @@ using Inkscape::UI::Dialog::build_grbl_firmware_sync_status;
 using Inkscape::UI::Dialog::can_start_grbl_firmware_sync;
 using Inkscape::UI::Dialog::make_grbl_firmware_sync_request_plan;
 using Inkscape::UI::Dialog::make_grbl_firmware_sync_ui_plan;
+using Inkscape::UI::Dialog::parse_grbl_properties_snapshot;
 
 TEST(GrblPanelFirmwareSyncStateTest, SyncStartIsBlockedOnlyWhileStreaming)
 {
@@ -38,6 +39,18 @@ TEST(GrblPanelFirmwareSyncStateTest, StatusMentionsSyncedFields)
     EXPECT_NE(status.raw().find("410"), std::string::npos);
     EXPECT_NE(status.raw().find("260"), std::string::npos);
     EXPECT_NE(status.raw().find("mm"), std::string::npos);
+}
+
+TEST(GrblPanelFirmwareSyncStateTest, ImportedFileStatusUsesImportSummary)
+{
+    GrblFirmwareSnapshot snapshot;
+    snapshot.imported_from_file = true;
+    snapshot.has_x_travel = true;
+    snapshot.x_travel_mm = 200.0;
+
+    auto const status = build_grbl_firmware_sync_status(snapshot, false, false);
+    EXPECT_NE(status.raw().find("导入"), std::string::npos);
+    EXPECT_EQ(status.raw().find("已读取固件参数"), std::string::npos);
 }
 
 TEST(GrblPanelFirmwareSyncStateTest, RequestPlanUnifiesManualAndConnectTriggers)
@@ -109,4 +122,42 @@ TEST(GrblPanelFirmwareSyncStateTest, UiPlanChoosesBetweenSavingPrefsAndRefresh)
     auto const unchanged_plan = make_grbl_firmware_sync_ui_plan(snapshot, unchanged);
     EXPECT_FALSE(unchanged_plan.save_mapping_preferences);
     EXPECT_TRUE(unchanged_plan.schedule_plot_feedback_refresh);
+}
+
+TEST(GrblPanelFirmwareSyncStateTest, ParseAcceptsRawDollarDump)
+{
+    std::string const text = "ok\r\n$3=4\r\n$130=410.000\r\n$131=260.500\r\nok\r\n";
+    GrblFirmwareSnapshot snapshot;
+    Glib::ustring error;
+    ASSERT_TRUE(parse_grbl_properties_snapshot(text, snapshot, error));
+    EXPECT_TRUE(snapshot.imported_from_file);
+    EXPECT_TRUE(snapshot.has_direction_mask);
+    EXPECT_EQ(snapshot.direction_mask, 4);
+    EXPECT_TRUE(snapshot.has_x_travel);
+    EXPECT_DOUBLE_EQ(snapshot.x_travel_mm, 410.0);
+    EXPECT_TRUE(snapshot.has_y_travel);
+    EXPECT_DOUBLE_EQ(snapshot.y_travel_mm, 260.5);
+    EXPECT_NE(snapshot.display_text.raw().find("$130=410.000"), std::string::npos);
+}
+
+TEST(GrblPanelFirmwareSyncStateTest, ParseAcceptsPropertiesStyleAndIgnoresComments)
+{
+    std::string const text = "# header\n130=200\n!skip\n3=2\n";
+    GrblFirmwareSnapshot snapshot;
+    Glib::ustring error;
+    ASSERT_TRUE(parse_grbl_properties_snapshot(text, snapshot, error));
+    EXPECT_TRUE(snapshot.has_x_travel);
+    EXPECT_DOUBLE_EQ(snapshot.x_travel_mm, 200.0);
+    EXPECT_TRUE(snapshot.has_direction_mask);
+    EXPECT_EQ(snapshot.direction_mask, 2);
+    EXPECT_FALSE(snapshot.has_y_travel);
+}
+
+TEST(GrblPanelFirmwareSyncStateTest, ParseRejectsFileWithoutSettings)
+{
+    std::string const text = "ok\nerror: bad input\n";
+    GrblFirmwareSnapshot snapshot;
+    Glib::ustring error;
+    EXPECT_FALSE(parse_grbl_properties_snapshot(text, snapshot, error));
+    EXPECT_FALSE(error.empty());
 }
