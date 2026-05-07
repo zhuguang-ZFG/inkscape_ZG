@@ -19,6 +19,7 @@ class GrblLink;
 namespace Inkscape::UI::Dialog {
 
 struct GrblFirmwareSnapshot {
+    std::vector<std::pair<int, std::string>> settings;
     bool imported_from_file = false;
     bool has_direction_mask = false;
     int direction_mask = 0;

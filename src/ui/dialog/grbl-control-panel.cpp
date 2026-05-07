@@ -618,6 +618,7 @@ bool parse_grbl_properties_snapshot(std::string const &text, GrblFirmwareSnapsho
         }
 
         saw_setting = true;
+        snapshot.settings.emplace_back(code, value);
         setting_lines.push_back("$" + std::to_string(code) + "=" + value);
 
         try {
@@ -656,6 +657,35 @@ bool parse_grbl_properties_snapshot(std::string const &text, GrblFirmwareSnapsho
     }
     snapshot.display_text = out.str();
     return true;
+}
+
+Glib::ustring build_imported_firmware_settings_preview(GrblFirmwareSnapshot const &snapshot)
+{
+    std::vector<Glib::ustring> preview_lines;
+    for (auto const &[code, value] : snapshot.settings) {
+        if (code == 3 || code == 130 || code == 131) {
+            preview_lines.emplace_back(Glib::ustring::compose("$%1=%2", code, value));
+        }
+    }
+    if (preview_lines.empty()) {
+        std::size_t const preview_count = std::min<std::size_t>(snapshot.settings.size(), 6);
+        for (std::size_t i = 0; i < preview_count; ++i) {
+            auto const &[code, value] = snapshot.settings[i];
+            preview_lines.emplace_back(Glib::ustring::compose("$%1=%2", code, value));
+        }
+    }
+
+    std::ostringstream text;
+    text << Glib::ustring::compose(_("已识别 %1 项 GRBL 参数。"), static_cast<int>(snapshot.settings.size())).raw();
+    if (!preview_lines.empty()) {
+        text << "\n";
+        text << _("关键项预览：").raw();
+        for (auto const &line : preview_lines) {
+            text << "\n" << line.raw();
+        }
+    }
+    text << "\n\n" << _("你可以只导入到当前面板，也可以直接写入当前已连接的控制器。").raw();
+    return Glib::ustring(text.str());
 }
 
 } // namespace
@@ -1222,6 +1252,59 @@ GrblFirmwareSyncApplyResult GrblControlPanel::apply_firmware_snapshot_to_ui(Grbl
     }
 
     return result;
+}
+
+bool GrblControlPanel::confirm_imported_firmware_settings_action(GrblFirmwareSnapshot const &snapshot,
+                                                                 bool &apply_to_controller)
+{
+    apply_to_controller = false;
+    auto *win = get_dialog_parent_window("无法弹出参数导入确认窗口。");
+    if (!win) {
+        return false;
+    }
+
+    constexpr int k_resp_import_only = 1;
+    constexpr int k_resp_apply_controller = 2;
+
+    Gtk::MessageDialog dlg(*win, _("如何处理这份参数文件？"), false, Gtk::MessageType::QUESTION,
+                           Gtk::ButtonsType::NONE, true);
+    dlg.set_title(_("导入 GRBL 参数"));
+    dlg.set_secondary_text(build_imported_firmware_settings_preview(snapshot));
+    dlg.add_button(_("取消"), Gtk::ResponseType::CANCEL);
+    dlg.add_button(_("仅导入到面板"), static_cast<Gtk::ResponseType>(k_resp_import_only));
+    if (is_connect_active()) {
+        dlg.add_button(_("写入当前控制器"), static_cast<Gtk::ResponseType>(k_resp_apply_controller));
+    }
+
+    auto const response = Inkscape::UI::dialog_run(dlg);
+    if (response == static_cast<Gtk::ResponseType>(k_resp_import_only)) {
+        return true;
+    }
+    if (response == static_cast<Gtk::ResponseType>(k_resp_apply_controller)) {
+        apply_to_controller = true;
+        return true;
+    }
+    return false;
+}
+
+bool GrblControlPanel::apply_imported_firmware_settings_to_controller(GrblFirmwareSnapshot const &snapshot)
+{
+    if (snapshot.settings.empty()) {
+        post_status(_("这份参数文件里没有可写入控制器的参数。"), true);
+        return false;
+    }
+
+    run_action([this, snapshot](std::string &e) {
+        for (auto const &[code, value] : snapshot.settings) {
+            std::string const line = "$" + std::to_string(code) + "=" + value;
+            if (!_link->send_line_wait_ok(line, e)) {
+                return;
+            }
+        }
+    }, false);
+
+    request_firmware_sync(GrblFirmwareSyncRequestOrigin::manual);
+    return true;
 }
 
 void GrblControlPanel::post_machine_status(Glib::ustring const &text)
@@ -2245,6 +2328,11 @@ bool GrblControlPanel::import_firmware_snapshot_from_file(std::string const &pat
         return false;
     }
 
+    bool apply_to_controller = false;
+    if (!confirm_imported_firmware_settings_action(snapshot, apply_to_controller)) {
+        return false;
+    }
+
     set_firmware_info_text(snapshot.display_text);
     auto const apply_result = apply_firmware_snapshot_to_ui(snapshot);
     auto const ui_plan = make_grbl_firmware_sync_ui_plan(snapshot, apply_result);
@@ -2255,6 +2343,9 @@ bool GrblControlPanel::import_firmware_snapshot_from_file(std::string const &pat
         schedule_plot_feedback_refresh(true);
     }
     post_status(ui_plan.status, false);
+    if (apply_to_controller) {
+        return apply_imported_firmware_settings_to_controller(snapshot);
+    }
     return true;
 }
 

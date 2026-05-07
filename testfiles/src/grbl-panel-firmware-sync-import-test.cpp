@@ -33,3 +33,17 @@ TEST(GrblPanelFirmwareSyncImportTest, FirmwareReadStatusKeepsReadSummary)
     EXPECT_NE(status.raw().find("读取"), std::string::npos);
     EXPECT_EQ(status.raw().find("导入"), std::string::npos);
 }
+
+TEST(GrblPanelFirmwareSyncImportTest, ImportedSnapshotKeepsSettingList)
+{
+    GrblFirmwareSnapshot snapshot;
+    snapshot.imported_from_file = true;
+    snapshot.settings.emplace_back(3, "4");
+    snapshot.settings.emplace_back(130, "200.0");
+
+    ASSERT_EQ(snapshot.settings.size(), 2u);
+    EXPECT_EQ(snapshot.settings[0].first, 3);
+    EXPECT_EQ(snapshot.settings[0].second, "4");
+    EXPECT_EQ(snapshot.settings[1].first, 130);
+    EXPECT_EQ(snapshot.settings[1].second, "200.0");
+}

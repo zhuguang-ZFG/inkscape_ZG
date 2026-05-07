@@ -144,6 +144,8 @@ private:
     void set_mapping_sync_suspended(bool suspended) noexcept;
     bool should_sync_page_to_bed_on_firmware_read() const;
     GrblFirmwareSyncApplyResult apply_firmware_snapshot_to_ui(GrblFirmwareSnapshot const &snapshot);
+    bool confirm_imported_firmware_settings_action(GrblFirmwareSnapshot const &snapshot, bool &apply_to_controller);
+    bool apply_imported_firmware_settings_to_controller(GrblFirmwareSnapshot const &snapshot);
     bool import_firmware_snapshot_from_file(std::string const &path);
 
     void refresh_port_list();
