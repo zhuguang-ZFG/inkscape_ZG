@@ -349,6 +349,8 @@ add_unit_test(grbl-panel-job-guard-test TEST_SOURCE "grbl-panel-job-guard-test.c
                              EXTRA_LIBS GLibmm::GLibmm)
 add_unit_test(grbl-panel-transport-state-test TEST_SOURCE "grbl-panel-transport-state-test.cpp"
                                               SOURCES "ui/dialog/grbl-panel-transport-state.cpp")
+add_unit_test(grbl-panel-streaming-reply-test TEST_SOURCE "grbl-panel-streaming-reply-test.cpp"
+                                             SOURCES "ui/dialog/grbl-panel-streaming-reply.cpp")
 
 add_dependencies(tests unit_tests)
 
