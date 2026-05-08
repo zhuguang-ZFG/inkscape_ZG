@@ -195,3 +195,34 @@ git submodule update --init --recursive
 ```
 
 如果网络不稳定，可以多执行一次。
+
+### 10.4 安装包启动时报缺少 DLL
+
+如果双击安装后的 `inkscape.exe`，一上来就报：
+
+- `找不到 lib2geom.dll`
+- 或者连续提示还缺别的 DLL
+
+不要先怀疑编译失败，先怀疑安装包 staging 漏文件。
+
+这次已经确认过一个典型坑：
+
+- `install_dir\bin` 里明明有 `lib2geom.dll`
+- 但 NSIS 最终打包目录 `_CPack_Packages\win64\NSIS\...\inkscape\bin` 里没有
+- 结果安装包装出来仍然会报缺 DLL
+
+正确检查方式：
+
+```powershell
+Get-ChildItem inkscape\build-zg\_CPack_Packages\win64\NSIS\*\inkscape\bin\lib2geom.dll
+Get-ChildItem inkscape\build-zg\_CPack_Packages\win64\NSIS\*\inkscape\bin\libinkscape_base.dll
+Get-ChildItem inkscape\build-zg\_CPack_Packages\win64\NSIS\*\inkscape\bin\libgtk-4-1.dll
+```
+
+只看下面这个目录是不够的：
+
+```text
+inkscape\build-zg\install_dir\bin
+```
+
+因为它只是本机构建安装树，不等于最终安装包实际带走的文件。
