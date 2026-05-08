@@ -43,6 +43,7 @@
 #include "ui/dialog/grbl-panel-mapping-prefs.h"
 #include "ui/dialog/grbl-panel-presentation.h"
 #include "ui/dialog/grbl-panel-sender.h"
+#include "ui/dialog/grbl-panel-streaming-state.h"
 #include "ui/dialog/grbl-panel-transport-state.h"
 #include "ui/dialog/grbl-runtime-state.h"
 #include "ui/dialog/grbl-panel-firmware-sync.h"
@@ -85,6 +86,8 @@ private:
     void selectionModified(Inkscape::Selection *selection, guint flags) override;
     void connect_toggle();
     void post_status(Glib::ustring const &text, bool is_error = false);
+    void refresh_streaming_status_ui();
+    void reset_streaming_status_ui();
     bool start_short_worker(std::function<void(std::atomic<bool> const &)> work,
                             Glib::ustring const &shutdown_message = {});
     bool with_locked_open_link(std::atomic<bool> const &stop, std::function<void()> work,
@@ -275,6 +278,11 @@ private:
     Gtk::Button _btn_read_radio_mode;
     Gtk::Button _btn_read_ip;
     Gtk::Button _btn_apply_radio_mode;
+    GrblPanelStreamingState _streaming_state;
+    Gtk::Label _streaming_phase;
+    Gtk::Label _streaming_progress;
+    Gtk::Label _streaming_in_flight;
+    Gtk::Label _streaming_blocking;
     Gtk::Label _status;
     Gtk::Label _jog_lbl;
     Gtk::ComboBoxText _jog_dist;

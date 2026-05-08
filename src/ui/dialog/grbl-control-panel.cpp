@@ -72,6 +72,8 @@
 #include "ui/dialog/grbl-panel-mapping-prefs.h"
 #include "ui/dialog/grbl-panel-mapping-state.h"
 #include "ui/dialog/grbl-pen-command.h"
+#include "ui/dialog/grbl-panel-streaming-presentation.h"
+#include "ui/dialog/grbl-panel-streaming-reply.h"
 #include "ui/dialog/grbl-panel-summary-presentation.h"
 #include "ui/dialog/grbl-work-origin.h"
 #include "ui/dialog/grbl-runtime-state.h"
@@ -848,6 +850,27 @@ void GrblControlPanel::post_status(Glib::ustring const &text, bool const is_erro
     }, *this));
 }
 
+void GrblControlPanel::refresh_streaming_status_ui()
+{
+    auto const presentation = make_grbl_streaming_presentation(_streaming_state);
+    _streaming_phase.set_text(presentation.phase_label);
+    _streaming_progress.set_text(presentation.progress_label);
+    _streaming_in_flight.set_text(presentation.in_flight_label);
+    _streaming_blocking.set_text(presentation.blocking_label);
+
+    bool const visible = presentation.visible;
+    _streaming_phase.set_visible(visible);
+    _streaming_progress.set_visible(visible);
+    _streaming_in_flight.set_visible(visible);
+    _streaming_blocking.set_visible(visible && !presentation.blocking_label.empty());
+}
+
+void GrblControlPanel::reset_streaming_status_ui()
+{
+    _streaming_state.disconnect();
+    refresh_streaming_status_ui();
+}
+
 bool GrblControlPanel::start_short_worker(std::function<void(std::atomic<bool> const &)> work,
                                           Glib::ustring const &shutdown_message)
 {
@@ -1018,6 +1041,7 @@ void GrblControlPanel::disconnect_controller(bool const announce_status)
         }
     }
     post_machine_status({});
+    reset_streaming_status_ui();
 }
 
 void GrblControlPanel::finish_connect_attempt_failed_ui(Glib::ustring const &status, bool const clear_machine_status)
@@ -1528,16 +1552,47 @@ Gtk::Window *GrblControlPanel::get_dialog_parent_window(char const *missing_pare
 
 GrblPanelSenderContext GrblControlPanel::make_sender_context()
 {
-    return {
-        .link = _link.get(),
-        .cancel = &_gcode_cancel,
-        .post_status = [this](Glib::ustring const &text, bool is_error) { post_status(text, is_error); },
-        .post_not_connected_status = [this] { post_not_connected_status(); },
-        .post_gcode_stream_result = [this](std::string const &err) { post_gcode_stream_result(err); },
-        .refresh_plot_feedback_after_gcode_change = [this] { refresh_plot_feedback_after_gcode_change(); },
-        .finish_worker = [this](std::unique_lock<std::mutex> &lock) { finish_gcode_stream_worker(lock); },
-        .with_plot_waits = [this](std::function<void()> work) { with_grbl_plot_waits(std::move(work)); },
+    GrblPanelSenderContext context;
+    context.link = _link.get();
+    context.cancel = &_gcode_cancel;
+    context.post_status = [this](Glib::ustring const &text, bool is_error) { post_status(text, is_error); };
+    context.post_not_connected_status = [this] { post_not_connected_status(); };
+    context.post_gcode_stream_result = [this](std::string const &err) { post_gcode_stream_result(err); };
+    context.refresh_plot_feedback_after_gcode_change = [this] { refresh_plot_feedback_after_gcode_change(); };
+    context.finish_worker = [this](std::unique_lock<std::mutex> &lock) { finish_gcode_stream_worker(lock); };
+    context.with_plot_waits = [this](std::function<void()> work) { with_grbl_plot_waits(std::move(work)); };
+    context.streaming_started = [this](std::size_t total) {
+        Glib::signal_idle().connect_once(sigc::track_object([this, total] {
+            _streaming_state.start(total);
+            refresh_streaming_status_ui();
+        }, *this));
     };
+    context.streaming_line_written = [this] {
+        Glib::signal_idle().connect_once(sigc::track_object([this] {
+            _streaming_state.line_written();
+            refresh_streaming_status_ui();
+        }, *this));
+    };
+    context.streaming_reply_received = [this](std::string const &line) {
+        Glib::signal_idle().connect_once(sigc::track_object([this, line] {
+            _streaming_state.apply_reply(parse_grbl_streaming_reply(line));
+            _streaming_state.finish_if_complete();
+            refresh_streaming_status_ui();
+        }, *this));
+    };
+    context.streaming_failed = [this](std::string const &err) {
+        Glib::signal_idle().connect_once(sigc::track_object([this, err] {
+            _streaming_state.fail(err);
+            refresh_streaming_status_ui();
+        }, *this));
+    };
+    context.streaming_finished = [this] {
+        Glib::signal_idle().connect_once(sigc::track_object([this] {
+            _streaming_state.finish_if_complete();
+            refresh_streaming_status_ui();
+        }, *this));
+    };
+    return context;
 }
 
 void GrblControlPanel::replace_editor_gcode_text(
@@ -2357,6 +2412,7 @@ void GrblControlPanel::complete_gcode_stream_ui(bool const join_worker_thread)
     if (plan.refresh_plot_feedback) {
         schedule_plot_feedback_refresh(false);
     }
+    refresh_streaming_status_ui();
     if (_cancel_return_to_origin_pending) {
         _cancel_return_to_origin_pending = false;
         return_to_work_origin_after_cancel();
@@ -3025,6 +3081,17 @@ Gtk::Frame *GrblControlPanel::build_log_section()
     hdr_log->set_halign(Gtk::Align::START);
     hdr_log->add_css_class("grbl-panel-caption");
     Inkscape::UI::pack_start(*box_log, *hdr_log, false, false, 0);
+    auto *stream_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 2);
+    _streaming_phase.add_css_class("grbl-panel-note");
+    _streaming_progress.add_css_class("grbl-panel-note");
+    _streaming_in_flight.add_css_class("grbl-panel-note");
+    _streaming_blocking.add_css_class("grbl-panel-note");
+    _streaming_blocking.add_css_class("error");
+    Inkscape::UI::pack_start(*stream_box, _streaming_phase, false, false, 0);
+    Inkscape::UI::pack_start(*stream_box, _streaming_progress, false, false, 0);
+    Inkscape::UI::pack_start(*stream_box, _streaming_in_flight, false, false, 0);
+    Inkscape::UI::pack_start(*stream_box, _streaming_blocking, false, false, 0);
+    Inkscape::UI::pack_start(*box_log, *stream_box, false, false, 0);
     Inkscape::UI::pack_start(*box_log, _status, true, true, 0);
     frame_log->set_child(*box_log);
     return frame_log;
@@ -3045,6 +3112,14 @@ void GrblControlPanel::build_ui()
     _status.set_selectable(true);
     _status.set_text(_("尚未连接。"));
     _status.add_css_class("grbl-panel-status");
+
+    for (auto *label : {&_streaming_phase, &_streaming_progress, &_streaming_in_flight, &_streaming_blocking}) {
+        label->set_halign(Gtk::Align::START);
+        label->set_wrap(true);
+        label->set_max_width_chars(56);
+        label->set_visible(false);
+    }
+    reset_streaming_status_ui();
 
     _btn_connect.set_label(_("连接"));
     _btn_connect.set_active(false);
