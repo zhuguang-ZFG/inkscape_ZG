@@ -354,6 +354,11 @@ add_unit_test(grbl-panel-streaming-reply-test TEST_SOURCE "grbl-panel-streaming-
 add_unit_test(grbl-panel-streaming-state-test TEST_SOURCE "grbl-panel-streaming-state-test.cpp"
                                              SOURCES "ui/dialog/grbl-panel-streaming-state.cpp"
                                                      "ui/dialog/grbl-panel-streaming-reply.cpp")
+add_unit_test(grbl-panel-streaming-presentation-test TEST_SOURCE "grbl-panel-streaming-presentation-test.cpp"
+                                                    SOURCES "ui/dialog/grbl-panel-streaming-presentation.cpp"
+                                                            "ui/dialog/grbl-panel-streaming-state.cpp"
+                                                            "ui/dialog/grbl-panel-streaming-reply.cpp"
+                                         EXTRA_LIBS GLibmm::GLibmm)
 
 add_dependencies(tests unit_tests)
 
