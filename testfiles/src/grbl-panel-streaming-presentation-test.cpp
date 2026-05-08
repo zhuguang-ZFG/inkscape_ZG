@@ -39,6 +39,21 @@ TEST(GrblPanelStreamingPresentationTest, RunningShowsProgressAndInFlight)
     EXPECT_TRUE(presentation.stop_sensitive);
 }
 
+TEST(GrblPanelStreamingPresentationTest, RunningWithUnknownTotalShowsActiveStream)
+{
+    GrblPanelStreamingState state;
+    state.start(0);
+
+    auto const presentation = make_grbl_streaming_presentation(state);
+    EXPECT_TRUE(presentation.visible);
+    EXPECT_NE(presentation.phase_label.raw().find("Running"), std::string::npos);
+    EXPECT_EQ(presentation.progress_label.raw().find("No active stream"), std::string::npos);
+    EXPECT_EQ(presentation.progress_fraction, 0.0);
+    EXPECT_TRUE(presentation.pause_sensitive);
+    EXPECT_FALSE(presentation.resume_sensitive);
+    EXPECT_TRUE(presentation.stop_sensitive);
+}
+
 TEST(GrblPanelStreamingPresentationTest, PausedEnablesResume)
 {
     GrblPanelStreamingState state;

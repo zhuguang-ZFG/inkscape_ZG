@@ -67,7 +67,8 @@ GrblStreamingPresentation make_grbl_streaming_presentation(GrblPanelStreamingSta
                                                              static_cast<guint64>(total));
     } else {
         presentation.progress_fraction = 0.0;
-        presentation.progress_label = _("No active stream");
+        presentation.progress_label =
+            presentation.visible ? _("Streaming active") : _("No active stream");
     }
 
     presentation.in_flight_label = Glib::ustring::compose(_("Awaiting %1 acknowledgements"),
