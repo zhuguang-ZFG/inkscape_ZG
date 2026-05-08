@@ -361,6 +361,9 @@ void GrblPanelSender::run_editor_gcode_send_worker(GrblPanelSenderContext const 
             return;
         }
         if (!err.empty()) {
+            if (context.streaming_failed) {
+                context.streaming_failed(err);
+            }
             context.post_gcode_stream_result(err);
         } else {
             post_gcode_send_completion(context.post_status, send_from_cursor, editor_line_1, sent);
