@@ -146,6 +146,7 @@ target_sources(inkscape_base PRIVATE
 	dialog/grbl-panel-mapping-state.cpp
 	dialog/grbl-panel-presentation.cpp
 	dialog/grbl-panel-streaming-reply.cpp
+	dialog/grbl-panel-streaming-state.cpp
 	dialog/grbl-panel-transport-state.cpp
 	dialog/grbl-runtime-state.cpp
 	dialog/grbl-panel-firmware-sync.cpp
@@ -396,6 +397,7 @@ target_sources(inkscape_base PRIVATE
 	dialog/grbl-panel-mapping-prefs.h
 	dialog/grbl-panel-mapping-state.h
 	dialog/grbl-panel-streaming-reply.h
+	dialog/grbl-panel-streaming-state.h
 	dialog/calligraphic-profile-rename.h
 	dialog/choose-file.h
 	dialog/choose-file-utils.h

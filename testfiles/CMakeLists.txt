@@ -351,6 +351,9 @@ add_unit_test(grbl-panel-transport-state-test TEST_SOURCE "grbl-panel-transport-
                                               SOURCES "ui/dialog/grbl-panel-transport-state.cpp")
 add_unit_test(grbl-panel-streaming-reply-test TEST_SOURCE "grbl-panel-streaming-reply-test.cpp"
                                              SOURCES "ui/dialog/grbl-panel-streaming-reply.cpp")
+add_unit_test(grbl-panel-streaming-state-test TEST_SOURCE "grbl-panel-streaming-state-test.cpp"
+                                             SOURCES "ui/dialog/grbl-panel-streaming-state.cpp"
+                                                     "ui/dialog/grbl-panel-streaming-reply.cpp")
 
 add_dependencies(tests unit_tests)
 
