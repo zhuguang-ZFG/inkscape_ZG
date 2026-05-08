@@ -2440,6 +2440,8 @@ bool GrblControlPanel::request_gcode_cancel_ui(bool const return_to_origin_after
     if (!set_gcode_cancel_requested(true)) {
         return false;
     }
+    _streaming_state.request_cancel();
+    refresh_streaming_status_ui();
     _cancel_return_to_origin_pending = return_to_origin_after_cancel;
     if (plan.post_status) {
         if (return_to_origin_after_cancel) {

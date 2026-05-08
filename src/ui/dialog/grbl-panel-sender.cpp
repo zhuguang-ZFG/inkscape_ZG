@@ -190,6 +190,7 @@ Inkscape::Axidraw::GrblExportContext make_direct_send_context(SPDesktop *desktop
 }
 
 void attach_direct_send_progress_callbacks(std::function<void(Glib::ustring const &, bool)> const &post_status,
+                                           GrblPanelSenderContext const &sender_context,
                                            Inkscape::Axidraw::GrblExportContext &ctx)
 {
     struct StreamProgress {
@@ -197,6 +198,7 @@ void attach_direct_send_progress_callbacks(std::function<void(Glib::ustring cons
         std::size_t stroke_total = 0;
         std::size_t lines_sent = 0;
         std::size_t lines_est = 0;
+        std::size_t streaming_lines_reported = 0;
     };
 
     auto const progress = std::make_shared<StreamProgress>();
@@ -228,9 +230,21 @@ void attach_direct_send_progress_callbacks(std::function<void(Glib::ustring cons
         progress->stroke_total = total;
         refresh_status();
     };
-    ctx.on_plot_gcode_line_progress = [progress, refresh_status](std::size_t sent, std::size_t est) {
+    ctx.on_plot_gcode_line_progress = [progress, refresh_status, &sender_context](std::size_t sent, std::size_t est) {
         progress->lines_sent = sent;
         progress->lines_est = est;
+        if (progress->streaming_lines_reported == 0 && est > 0 && sender_context.streaming_started) {
+            sender_context.streaming_started(est);
+        }
+        while (progress->streaming_lines_reported < sent) {
+            if (sender_context.streaming_line_written) {
+                sender_context.streaming_line_written();
+            }
+            if (sender_context.streaming_reply_received) {
+                sender_context.streaming_reply_received("ok");
+            }
+            ++progress->streaming_lines_reported;
+        }
         refresh_status();
     };
 }
@@ -248,6 +262,15 @@ void GrblPanelSender::run_direct_send_worker(GrblPanelSenderContext const &conte
     auto *serial = context.link ? context.link->serial_port() : nullptr;
     if (!serial || !serial->is_open()) {
         context.post_status(_("Serial port is disconnected."), true);
+        if (context.streaming_started) {
+            context.streaming_started(0);
+        }
+        if (context.streaming_failed) {
+            context.streaming_failed(_("Serial port is disconnected."));
+        }
+        if (context.streaming_finished) {
+            context.streaming_finished();
+        }
         finish();
         return;
     }
@@ -259,7 +282,7 @@ void GrblPanelSender::run_direct_send_worker(GrblPanelSenderContext const &conte
 
     auto ctx = make_direct_send_context(desktop, selection, use_current_layer_without_selection, context.cancel,
                                         params.manual_pen_change && params.pen_change_prompt ? win : nullptr);
-    attach_direct_send_progress_callbacks(context.post_status, ctx);
+    attach_direct_send_progress_callbacks(context.post_status, context, ctx);
 
     context.with_plot_waits([&] {
         bool streaming_finished = false;
@@ -299,6 +322,15 @@ void GrblPanelSender::run_editor_gcode_send_worker(GrblPanelSenderContext const 
     auto *link = context.link;
     if (!(link && link->is_open())) {
         context.post_not_connected_status();
+        if (context.streaming_started) {
+            context.streaming_started(0);
+        }
+        if (context.streaming_failed) {
+            context.streaming_failed(_("Not connected."));
+        }
+        if (context.streaming_finished) {
+            context.streaming_finished();
+        }
         finish();
         return;
     }
