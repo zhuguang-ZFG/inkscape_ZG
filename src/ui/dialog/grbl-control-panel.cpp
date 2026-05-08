@@ -1806,12 +1806,9 @@ void GrblControlPanel::finish_gcode_stream_worker(std::unique_lock<std::mutex> &
 
 void GrblControlPanel::with_grbl_plot_waits(std::function<void()> work)
 {
-    auto pump = [] {
-        if (auto const ctx = Glib::MainContext::get_default()) {
-            while (ctx->iteration(false)) {
-            }
-        }
-    };
+    // This runs on the G-code worker thread. Do not iterate GTK's main context here:
+    // panel streaming callbacks already post UI work to the real UI thread.
+    auto pump = [] {};
     grbl_begin_plot_waits(pump, &_gcode_cancel);
     scope_exit const end_plot{[] { grbl_end_plot_waits(); }};
     work();
