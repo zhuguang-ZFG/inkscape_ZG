@@ -301,6 +301,35 @@ std::string extract_ipv4_from_reply(std::string const &reply)
     return {};
 }
 
+void style_grbl_section_frame(Gtk::Frame &frame)
+{
+    frame.add_css_class("standard-frame");
+    frame.add_css_class("grbl-panel-section");
+    frame.set_margin_top(0);
+    frame.set_margin_bottom(0);
+}
+
+void style_grbl_note_label(Gtk::Label &label)
+{
+    label.add_css_class("small-font");
+    label.add_css_class("informational-text");
+    label.add_css_class("grbl-panel-note");
+    label.set_wrap(true);
+    label.set_halign(Gtk::Align::START);
+}
+
+void style_grbl_monospace_card(Gtk::Widget &widget)
+{
+    widget.add_css_class("monospace");
+    widget.add_css_class("grbl-panel-card");
+}
+
+void style_grbl_scroller(Gtk::ScrolledWindow &scroller)
+{
+    scroller.add_css_class("grbl-panel-card");
+    scroller.add_css_class("grbl-panel-scroll");
+}
+
 constexpr std::size_t k_max_gcode_stream_lines = 200000;
 
 constexpr std::size_t k_preview_max_strokes = 12000;
@@ -2818,6 +2847,189 @@ void GrblControlPanel::on_send_gcode()
         });
 }
 
+Gtk::Frame *GrblControlPanel::build_page_layout_section()
+{
+    auto *frame_layout = Gtk::make_managed<Gtk::Frame>();
+    frame_layout->set_label(_("页面、机器与恢复"));
+    style_grbl_section_frame(*frame_layout);
+
+    auto *box_layout = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+    auto *layout_hint = Gtk::make_managed<Gtk::Label>(
+        _("<small>这里可以按你手动指定的绘图范围整理图稿，也可以在页面被同步改小后恢复原页面尺寸；画布预览中会标出机器原点、机器 X+、机器 Y+ 方向。</small>"),
+        Gtk::Align::START);
+    layout_hint->set_use_markup(true);
+    style_grbl_note_label(*layout_hint);
+
+    auto *top_actions = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+    _btn_fit_to_bed.set_hexpand(true);
+    _btn_center_to_bed.set_hexpand(true);
+    _btn_restore_page_size.set_hexpand(true);
+    top_actions->append(_btn_fit_to_bed);
+    top_actions->append(_btn_center_to_bed);
+    top_actions->append(_btn_restore_page_size);
+
+    _layout_scale_summary.set_halign(Gtk::Align::START);
+    _layout_scale_summary.set_wrap(true);
+    _layout_scale_summary.set_use_markup(true);
+    _layout_scale_summary.set_selectable(true);
+    _layout_scale_summary.set_xalign(0.0f);
+    style_grbl_monospace_card(_layout_scale_summary);
+    _layout_scale_summary.set_margin_top(2);
+    _layout_scale_summary.set_margin_bottom(2);
+    _layout_scale_summary.set_markup(_("<b>当前缩放</b>\n尚未分析当前图稿与机器行程。"));
+    update_page_restore_button();
+
+    Inkscape::UI::pack_start(*box_layout, *top_actions, false, false, 0);
+    Inkscape::UI::pack_start(*box_layout, _layout_scale_summary, false, false, 0);
+    Inkscape::UI::pack_start(*box_layout, _chk_sync_page_to_bed, false, false, 0);
+    Inkscape::UI::pack_start(*box_layout, *layout_hint, false, false, 0);
+    frame_layout->set_child(*box_layout);
+    return frame_layout;
+}
+
+Gtk::Frame *GrblControlPanel::build_job_summary_section()
+{
+    auto *job_summary_frame = Gtk::make_managed<Gtk::Frame>();
+    job_summary_frame->set_label(_("任务概览"));
+    style_grbl_section_frame(*job_summary_frame);
+    job_summary_frame->set_child(_job_summary);
+    return job_summary_frame;
+}
+
+Gtk::Frame *GrblControlPanel::build_serial_section()
+{
+    Inkscape::UI::pack_start(_port_row, _port_lbl, false, false, 6);
+    Inkscape::UI::pack_start(_port_row, _port_combo, true, true, 6);
+    Inkscape::UI::pack_start(_port_row, _btn_refresh_ports, false, false, 0);
+
+    auto *frame_serial = Gtk::make_managed<Gtk::Frame>();
+    frame_serial->set_label(_("绘图机连接"));
+    style_grbl_section_frame(*frame_serial);
+    auto *box_serial = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+    Inkscape::UI::pack_start(*box_serial, _port_row, false, false, 0);
+
+    auto *firmware_actions_row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    Inkscape::UI::pack_start(*firmware_actions_row, _btn_read_firmware, true, true, 0);
+    Inkscape::UI::pack_start(*firmware_actions_row, _btn_import_firmware_file, true, true, 0);
+    Inkscape::UI::pack_start(*box_serial, *firmware_actions_row, false, false, 0);
+
+    auto *radio_row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto *radio_lbl = Gtk::make_managed<Gtk::Label>(_("<b>无线与固件</b>"), Gtk::Align::START);
+    radio_lbl->set_use_markup(true);
+    Inkscape::UI::pack_start(*radio_row, *radio_lbl, false, false, 0);
+    Inkscape::UI::pack_start(*radio_row, _radio_mode_combo, true, true, 0);
+    Inkscape::UI::pack_start(*radio_row, _radio_pwd, true, true, 0);
+    Inkscape::UI::pack_start(*radio_row, _btn_read_radio_mode, false, false, 0);
+    Inkscape::UI::pack_start(*radio_row, _btn_read_ip, false, false, 0);
+    Inkscape::UI::pack_start(*radio_row, _btn_apply_radio_mode, false, false, 0);
+    Inkscape::UI::pack_start(*box_serial, *radio_row, false, false, 0);
+    Inkscape::UI::pack_start(*box_serial, _chk_radio_restart, false, false, 0);
+
+    auto *hdr_status = Gtk::make_managed<Gtk::Label>();
+    hdr_status->set_markup(_("<small>绘图机状态</small>"));
+    hdr_status->set_halign(Gtk::Align::START);
+    Inkscape::UI::pack_start(*box_serial, *hdr_status, false, false, 0);
+    Inkscape::UI::pack_start(*box_serial, _machine_status, false, false, 0);
+    Inkscape::UI::pack_start(*box_serial, _btn_connect, false, false, 0);
+    frame_serial->set_child(*box_serial);
+    return frame_serial;
+}
+
+Gtk::Frame *GrblControlPanel::build_mapping_section()
+{
+    auto *frame_mapping = Gtk::make_managed<Gtk::Frame>();
+    frame_mapping->set_label(_("绘图范围与坐标映射"));
+    style_grbl_section_frame(*frame_mapping);
+    auto *box_mapping = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+    auto *mapping_grid = Gtk::make_managed<Gtk::Grid>();
+    mapping_grid->set_row_spacing(4);
+    mapping_grid->set_column_spacing(8);
+    mapping_grid->attach(_chk_swap_xy, 0, 0, 1, 1);
+    mapping_grid->attach(_chk_invert_x, 1, 0, 1, 1);
+    mapping_grid->attach(_chk_invert_y, 2, 0, 1, 1);
+    mapping_grid->attach(_chk_flip_y, 0, 1, 2, 1);
+    mapping_grid->attach(_chk_align_origin, 2, 1, 1, 1);
+    mapping_grid->attach(_chk_clip_bed, 0, 2, 1, 1);
+
+    auto *lbl_bed_preset = Gtk::make_managed<Gtk::Label>(_("纸张/范围"), Gtk::Align::START);
+    auto *lbl_bed_w = Gtk::make_managed<Gtk::Label>(_("自定义宽(mm)"), Gtk::Align::START);
+    auto *lbl_bed_d = Gtk::make_managed<Gtk::Label>(_("自定义高(mm)"), Gtk::Align::START);
+    mapping_grid->attach(*lbl_bed_preset, 1, 2, 1, 1);
+    mapping_grid->attach(_bed_preset_combo, 2, 2, 1, 1);
+    mapping_grid->attach(*lbl_bed_w, 1, 3, 1, 1);
+    mapping_grid->attach(_bed_width_spin, 2, 3, 1, 1);
+    mapping_grid->attach(*lbl_bed_d, 1, 4, 1, 1);
+    mapping_grid->attach(_bed_depth_spin, 2, 4, 1, 1);
+
+    auto *lbl_draw_feed = Gtk::make_managed<Gtk::Label>(_("绘制速度(mm/min)"), Gtk::Align::START);
+    auto *lbl_travel_feed = Gtk::make_managed<Gtk::Label>(_("空走速度(mm/min)"), Gtk::Align::START);
+    auto *lbl_pen_up_delay = Gtk::make_managed<Gtk::Label>(_("抬笔后等待(ms)"), Gtk::Align::START);
+    auto *lbl_pen_down_delay = Gtk::make_managed<Gtk::Label>(_("落笔后等待(ms)"), Gtk::Align::START);
+    auto *lbl_pen_up_cmd = Gtk::make_managed<Gtk::Label>(_("抬笔 G-code"), Gtk::Align::START);
+    auto *lbl_pen_down_cmd = Gtk::make_managed<Gtk::Label>(_("落笔 G-code"), Gtk::Align::START);
+    mapping_grid->attach(*lbl_draw_feed, 0, 5, 1, 1);
+    mapping_grid->attach(_draw_feed_spin, 1, 5, 2, 1);
+    mapping_grid->attach(*lbl_travel_feed, 0, 6, 1, 1);
+    mapping_grid->attach(_travel_feed_spin, 1, 6, 2, 1);
+    mapping_grid->attach(*lbl_pen_up_delay, 0, 7, 1, 1);
+    mapping_grid->attach(_pen_up_delay_spin, 1, 7, 2, 1);
+    mapping_grid->attach(*lbl_pen_down_delay, 0, 8, 1, 1);
+    mapping_grid->attach(_pen_down_delay_spin, 1, 8, 2, 1);
+    mapping_grid->attach(*lbl_pen_up_cmd, 0, 9, 1, 1);
+    mapping_grid->attach(_pen_up_cmd_entry, 1, 9, 2, 1);
+    mapping_grid->attach(*lbl_pen_down_cmd, 0, 10, 1, 1);
+    mapping_grid->attach(_pen_down_cmd_entry, 1, 10, 2, 1);
+    mapping_grid->attach(_chk_long_pen_up, 0, 11, 1, 1);
+
+    auto *lbl_long_pen = Gtk::make_managed<Gtk::Label>(_("高抬笔位置"), Gtk::Align::START);
+    auto *lbl_long_move = Gtk::make_managed<Gtk::Label>(_("触发距离(mm)"), Gtk::Align::START);
+    mapping_grid->attach(*lbl_long_pen, 1, 11, 1, 1);
+    mapping_grid->attach(_long_pen_up_spin, 2, 11, 1, 1);
+    mapping_grid->attach(*lbl_long_move, 1, 12, 1, 1);
+    mapping_grid->attach(_long_move_dist_spin, 2, 12, 1, 1);
+
+    auto *mapping_hint = Gtk::make_managed<Gtk::Label>(
+        _("<small>绘图范围不再从固件自动读取，请在这里直接选 A/B/C/Letter/Legal 或自定义。"
+          "“同步绘图机参数”现在只同步方向类参数；交换 X/Y 仍属于主机侧映射，需要你按绘图机结构手动设置。"
+          "长距离高抬笔参考了 kxnx 绘图机软件中的做法；近距离连笔与起止 G-code 放在下方“绘图任务”区域统一设置。</small>"),
+        Gtk::Align::START);
+    mapping_hint->set_use_markup(true);
+    style_grbl_note_label(*mapping_hint);
+
+    Inkscape::UI::pack_start(*box_mapping, *mapping_grid, false, false, 0);
+    Inkscape::UI::pack_start(*box_mapping, *mapping_hint, false, false, 0);
+    Inkscape::UI::pack_start(*box_mapping, _firmware_info_scroll, true, true, 0);
+    frame_mapping->set_child(*box_mapping);
+    return frame_mapping;
+}
+
+Gtk::Frame *GrblControlPanel::build_motion_section(Gtk::Grid &jog_grid)
+{
+    auto *frame_motion = Gtk::make_managed<Gtk::Frame>();
+    frame_motion->set_label(_("走笔与点动"));
+    style_grbl_section_frame(*frame_motion);
+    auto *box_motion = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
+    box_motion->append(jog_grid);
+    frame_motion->set_child(*box_motion);
+    return frame_motion;
+}
+
+Gtk::Frame *GrblControlPanel::build_log_section()
+{
+    auto *frame_log = Gtk::make_managed<Gtk::Frame>();
+    frame_log->set_label(_("日志"));
+    style_grbl_section_frame(*frame_log);
+    auto *box_log = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+    auto *hdr_log = Gtk::make_managed<Gtk::Label>();
+    hdr_log->set_markup(_("<small>消息</small>"));
+    hdr_log->set_halign(Gtk::Align::START);
+    hdr_log->add_css_class("grbl-panel-caption");
+    Inkscape::UI::pack_start(*box_log, *hdr_log, false, false, 0);
+    Inkscape::UI::pack_start(*box_log, _status, true, true, 0);
+    frame_log->set_child(*box_log);
+    return frame_log;
+}
+
 void GrblControlPanel::build_ui()
 {
     _jog_lbl.set_markup(_("<b>点动步长（mm）</b>"));
@@ -2832,9 +3044,11 @@ void GrblControlPanel::build_ui()
     _status.set_max_width_chars(56);
     _status.set_selectable(true);
     _status.set_text(_("尚未连接。"));
+    _status.add_css_class("grbl-panel-status");
 
     _btn_connect.set_label(_("连接"));
     _btn_connect.set_active(false);
+    _btn_connect.add_css_class("suggested-action");
     _btn_connect.set_tooltip_text(
         _("使用下方所选端口连接绘图机（也会保存到“编辑 -> 首选项 -> 输入/输出 -> 绘图机”）。"
           "波特率也来自同一页面。"));
@@ -2883,11 +3097,13 @@ void GrblControlPanel::build_ui()
     _machine_status.set_halign(Gtk::Align::START);
     _machine_status.set_ellipsize(Pango::EllipsizeMode::END);
     _machine_status.set_max_width_chars(56);
-    _machine_status.add_css_class("monospace");
+    style_grbl_monospace_card(_machine_status);
     _machine_status.set_tooltip_text(
         _("来自控制器的实时状态（连接期间大约每 1.5 秒轮询一次）。"));
 
     _frame.set_label(_("绘图机工作台"));
+    _frame.add_css_class("flat");
+    _frame.add_css_class("grbl-control-panel-root");
     _frame.set_margin_top(0);
     _frame.set_margin_bottom(0);
     _frame.set_margin_start(0);
@@ -3058,7 +3274,7 @@ void GrblControlPanel::build_ui()
     _firmware_info_view.set_editable(false);
     _firmware_info_view.set_cursor_visible(false);
     _firmware_info_view.set_wrap_mode(Gtk::WrapMode::WORD_CHAR);
-    _firmware_info_view.add_css_class("monospace");
+    style_grbl_monospace_card(_firmware_info_view);
     if (auto const buf = _firmware_info_view.get_buffer()) {
         buf->set_text(_("尚未读取固件参数。"));
     }
@@ -3066,8 +3282,10 @@ void GrblControlPanel::build_ui()
     _firmware_info_scroll.set_policy(Gtk::PolicyType::AUTOMATIC, Gtk::PolicyType::AUTOMATIC);
     _firmware_info_scroll.set_min_content_height(100);
     _firmware_info_scroll.set_has_frame(true);
+    style_grbl_scroller(_firmware_info_scroll);
 
     _gcode_frame.set_label(_("绘图任务"));
+    style_grbl_section_frame(_gcode_frame);
     _gcode_help.set_markup(
         _("<small><b>从图稿填充</b> 会按与“发送文档到绘图机”相同的规则生成任务（包括选择集、图层限制和绘图机首选项），"
           "这样你可以在发送前先在这里检查或编辑。"
@@ -3078,21 +3296,17 @@ void GrblControlPanel::build_ui()
           "每行一条指令；以 <tt>;</tt> 开头的行和整行 <tt>(...)</tt> 注释在发送时会被跳过。"
           "每发送一行，都会等待设备返回 <tt>ok</tt>。发送过程中，日志会显示进度。"
           "<b>取消</b> 会在当前行结束后生效。</small>"));
-    _gcode_help.set_wrap(true);
-    _gcode_help.set_halign(Gtk::Align::START);
+    style_grbl_note_label(_gcode_help);
     _gcode_help.set_margin_bottom(4);
     _job_summary.set_halign(Gtk::Align::START);
     _job_summary.set_wrap(true);
     _job_summary.set_use_markup(true);
     _job_summary.set_selectable(true);
     _job_summary.set_xalign(0.0f);
-    _job_summary.add_css_class("monospace");
+    style_grbl_monospace_card(_job_summary);
     _job_summary.set_margin_top(4);
     _job_summary.set_margin_bottom(4);
     _job_summary.set_markup(_("<b>任务概览</b>\n尚未分析当前图稿。"));
-    auto *job_summary_frame = Gtk::make_managed<Gtk::Frame>();
-    job_summary_frame->set_label(_("任务概览"));
-    job_summary_frame->set_child(_job_summary);
     auto *job_tuning_grid = Gtk::make_managed<Gtk::Grid>();
     job_tuning_grid->set_row_spacing(4);
     job_tuning_grid->set_column_spacing(8);
@@ -3150,13 +3364,13 @@ void GrblControlPanel::build_ui()
           "“按图层工具号换笔(M6)”会读取图层名中的 T1/T2/T3，在层切换时插入 Tn M6，适合支持半自动换笔流程的固件。</small>"),
         Gtk::Align::START);
     job_tuning_hint->set_use_markup(true);
-    job_tuning_hint->set_wrap(true);
+    style_grbl_note_label(*job_tuning_hint);
     auto *start_gcode_lbl = Gtk::make_managed<Gtk::Label>(_("起始 G-code"), Gtk::Align::START);
     auto *end_gcode_lbl = Gtk::make_managed<Gtk::Label>(_("结束 G-code"), Gtk::Align::START);
     start_gcode_lbl->set_tooltip_text(_("在 G21/G90 之后、正式开始绘图之前插入的自定义指令。一行一条。"));
     end_gcode_lbl->set_tooltip_text(_("在最终抬笔之后插入的自定义指令。一行一条。"));
-    _start_gcode_view.add_css_class("monospace");
-    _end_gcode_view.add_css_class("monospace");
+    style_grbl_monospace_card(_start_gcode_view);
+    style_grbl_monospace_card(_end_gcode_view);
     _start_gcode_view.set_wrap_mode(Gtk::WrapMode::NONE);
     _end_gcode_view.set_wrap_mode(Gtk::WrapMode::NONE);
     _start_gcode_view.set_top_margin(4);
@@ -3175,6 +3389,8 @@ void GrblControlPanel::build_ui()
     _end_gcode_scroll.set_min_content_height(56);
     _start_gcode_scroll.set_has_frame(true);
     _end_gcode_scroll.set_has_frame(true);
+    style_grbl_scroller(_start_gcode_scroll);
+    style_grbl_scroller(_end_gcode_scroll);
     _start_gcode_view.set_tooltip_text(_("例如：M117 Plot Start、G0 X0 Y0 等。一行一条；空行会忽略。"));
     _end_gcode_view.set_tooltip_text(_("例如：G0 X0 Y0、M84、M117 Plot Done 等。一行一条；空行会忽略。"));
     _chk_canvas_plot_preview.set_tooltip_text(
@@ -3199,7 +3415,7 @@ void GrblControlPanel::build_ui()
             handle_editor_gcode_changed();
         });
     }
-    _gcode_view.add_css_class("monospace");
+    style_grbl_monospace_card(_gcode_view);
     _gcode_view.set_top_margin(4);
     _gcode_view.set_bottom_margin(4);
     _gcode_view.set_left_margin(4);
@@ -3210,6 +3426,7 @@ void GrblControlPanel::build_ui()
     _gcode_scroll.set_vexpand(true);
     _gcode_scroll.set_min_content_height(120);
     _gcode_scroll.set_has_frame(true);
+    style_grbl_scroller(_gcode_scroll);
 
     _btn_cancel_gcode.set_sensitive(false);
     _btn_load_gcode.set_icon_name("document-open-symbolic");
@@ -3218,6 +3435,9 @@ void GrblControlPanel::build_ui()
     _btn_save_gcode.set_icon_name("document-save-as-symbolic");
     _btn_send_gcode.set_icon_name("document-send-symbolic");
     _btn_cancel_gcode.set_icon_name("process-stop-symbolic");
+    _btn_send_from_drawing.add_css_class("suggested-action");
+    _btn_send_gcode.add_css_class("suggested-action");
+    _btn_cancel_gcode.add_css_class("destructive-action");
     _btn_load_gcode.set_tooltip_text(_("从文本文件（UTF-8）替换编辑器内容，大小上限与生成任务相同。"));
     _btn_fill_from_drawing.set_tooltip_text(
         _("按当前绘图机首选项从当前文档生成 G-code（规则与主菜单中的“发送文档到绘图机”一致）。"));
@@ -3252,143 +3472,12 @@ void GrblControlPanel::build_ui()
     Inkscape::UI::pack_start(_gcode_inner, _gcode_actions, false, false, 2);
     _gcode_frame.set_child(_gcode_inner);
 
-    Inkscape::UI::pack_start(_port_row, _port_lbl, false, false, 6);
-    Inkscape::UI::pack_start(_port_row, _port_combo, true, true, 6);
-    Inkscape::UI::pack_start(_port_row, _btn_refresh_ports, false, false, 0);
-
-    auto *frame_layout = Gtk::make_managed<Gtk::Frame>();
-    frame_layout->set_label(_("页面、机器与恢复"));
-    frame_layout->set_margin_top(0);
-    auto *box_layout = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
-    auto *layout_hint = Gtk::make_managed<Gtk::Label>(
-        _("<small>这里可以按你手动指定的绘图范围整理图稿，也可以在页面被同步改小后恢复原页面尺寸；画布预览中会标出机器原点、机器 X+、机器 Y+ 方向。</small>"),
-        Gtk::Align::START);
-    layout_hint->set_use_markup(true);
-    layout_hint->set_wrap(true);
-    auto *top_actions = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
-    _btn_fit_to_bed.set_hexpand(true);
-    _btn_center_to_bed.set_hexpand(true);
-    _btn_restore_page_size.set_hexpand(true);
-    top_actions->append(_btn_fit_to_bed);
-    top_actions->append(_btn_center_to_bed);
-    top_actions->append(_btn_restore_page_size);
-    _layout_scale_summary.set_halign(Gtk::Align::START);
-    _layout_scale_summary.set_wrap(true);
-    _layout_scale_summary.set_use_markup(true);
-    _layout_scale_summary.set_selectable(true);
-    _layout_scale_summary.set_xalign(0.0f);
-    _layout_scale_summary.add_css_class("monospace");
-    _layout_scale_summary.set_margin_top(2);
-    _layout_scale_summary.set_margin_bottom(2);
-    _layout_scale_summary.set_markup(_("<b>当前缩放</b>\n尚未分析当前图稿与机器行程。"));
-    update_page_restore_button();
-    Inkscape::UI::pack_start(*box_layout, *top_actions, false, false, 0);
-    Inkscape::UI::pack_start(*box_layout, _layout_scale_summary, false, false, 0);
-    Inkscape::UI::pack_start(*box_layout, _chk_sync_page_to_bed, false, false, 0);
-    Inkscape::UI::pack_start(*box_layout, *layout_hint, false, false, 0);
-    frame_layout->set_child(*box_layout);
-
-    auto *frame_serial = Gtk::make_managed<Gtk::Frame>();
-    frame_serial->set_label(_("绘图机连接"));
-    frame_serial->set_margin_top(0);
-    auto *box_serial = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
-    Inkscape::UI::pack_start(*box_serial, _port_row, false, false, 0);
-    auto *firmware_actions_row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
-    Inkscape::UI::pack_start(*firmware_actions_row, _btn_read_firmware, true, true, 0);
-    Inkscape::UI::pack_start(*firmware_actions_row, _btn_import_firmware_file, true, true, 0);
-    Inkscape::UI::pack_start(*box_serial, *firmware_actions_row, false, false, 0);
-    auto *radio_row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
-    auto *radio_lbl = Gtk::make_managed<Gtk::Label>(_("<b>无线与固件</b>"), Gtk::Align::START);
-    radio_lbl->set_use_markup(true);
-    Inkscape::UI::pack_start(*radio_row, *radio_lbl, false, false, 0);
-    Inkscape::UI::pack_start(*radio_row, _radio_mode_combo, true, true, 0);
-    Inkscape::UI::pack_start(*radio_row, _radio_pwd, true, true, 0);
-    Inkscape::UI::pack_start(*radio_row, _btn_read_radio_mode, false, false, 0);
-    Inkscape::UI::pack_start(*radio_row, _btn_read_ip, false, false, 0);
-    Inkscape::UI::pack_start(*radio_row, _btn_apply_radio_mode, false, false, 0);
-    Inkscape::UI::pack_start(*box_serial, *radio_row, false, false, 0);
-    Inkscape::UI::pack_start(*box_serial, _chk_radio_restart, false, false, 0);
-    auto *hdr_status = Gtk::make_managed<Gtk::Label>();
-    hdr_status->set_markup(_("<small>绘图机状态</small>"));
-    hdr_status->set_halign(Gtk::Align::START);
-    Inkscape::UI::pack_start(*box_serial, *hdr_status, false, false, 0);
-    Inkscape::UI::pack_start(*box_serial, _machine_status, false, false, 0);
-    Inkscape::UI::pack_start(*box_serial, _btn_connect, false, false, 0);
-    frame_serial->set_child(*box_serial);
-
-    auto *frame_mapping = Gtk::make_managed<Gtk::Frame>();
-    frame_mapping->set_label(_("绘图范围与坐标映射"));
-    auto *box_mapping = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
-    auto *mapping_grid = Gtk::make_managed<Gtk::Grid>();
-    mapping_grid->set_row_spacing(4);
-    mapping_grid->set_column_spacing(8);
-    mapping_grid->attach(_chk_swap_xy, 0, 0, 1, 1);
-    mapping_grid->attach(_chk_invert_x, 1, 0, 1, 1);
-    mapping_grid->attach(_chk_invert_y, 2, 0, 1, 1);
-    mapping_grid->attach(_chk_flip_y, 0, 1, 2, 1);
-    mapping_grid->attach(_chk_align_origin, 2, 1, 1, 1);
-    mapping_grid->attach(_chk_clip_bed, 0, 2, 1, 1);
-    auto *lbl_bed_preset = Gtk::make_managed<Gtk::Label>(_("纸张/范围"), Gtk::Align::START);
-    auto *lbl_bed_w = Gtk::make_managed<Gtk::Label>(_("自定义宽(mm)"), Gtk::Align::START);
-    auto *lbl_bed_d = Gtk::make_managed<Gtk::Label>(_("自定义高(mm)"), Gtk::Align::START);
-    mapping_grid->attach(*lbl_bed_preset, 1, 2, 1, 1);
-    mapping_grid->attach(_bed_preset_combo, 2, 2, 1, 1);
-    mapping_grid->attach(*lbl_bed_w, 1, 3, 1, 1);
-    mapping_grid->attach(_bed_width_spin, 2, 3, 1, 1);
-    mapping_grid->attach(*lbl_bed_d, 1, 4, 1, 1);
-    mapping_grid->attach(_bed_depth_spin, 2, 4, 1, 1);
-    auto *lbl_draw_feed = Gtk::make_managed<Gtk::Label>(_("绘制速度(mm/min)"), Gtk::Align::START);
-    auto *lbl_travel_feed = Gtk::make_managed<Gtk::Label>(_("空走速度(mm/min)"), Gtk::Align::START);
-    auto *lbl_pen_up_delay = Gtk::make_managed<Gtk::Label>(_("抬笔后等待(ms)"), Gtk::Align::START);
-    auto *lbl_pen_down_delay = Gtk::make_managed<Gtk::Label>(_("落笔后等待(ms)"), Gtk::Align::START);
-    auto *lbl_pen_up_cmd = Gtk::make_managed<Gtk::Label>(_("抬笔 G-code"), Gtk::Align::START);
-    auto *lbl_pen_down_cmd = Gtk::make_managed<Gtk::Label>(_("落笔 G-code"), Gtk::Align::START);
-    mapping_grid->attach(*lbl_draw_feed, 0, 5, 1, 1);
-    mapping_grid->attach(_draw_feed_spin, 1, 5, 2, 1);
-    mapping_grid->attach(*lbl_travel_feed, 0, 6, 1, 1);
-    mapping_grid->attach(_travel_feed_spin, 1, 6, 2, 1);
-    mapping_grid->attach(*lbl_pen_up_delay, 0, 7, 1, 1);
-    mapping_grid->attach(_pen_up_delay_spin, 1, 7, 2, 1);
-    mapping_grid->attach(*lbl_pen_down_delay, 0, 8, 1, 1);
-    mapping_grid->attach(_pen_down_delay_spin, 1, 8, 2, 1);
-    mapping_grid->attach(*lbl_pen_up_cmd, 0, 9, 1, 1);
-    mapping_grid->attach(_pen_up_cmd_entry, 1, 9, 2, 1);
-    mapping_grid->attach(*lbl_pen_down_cmd, 0, 10, 1, 1);
-    mapping_grid->attach(_pen_down_cmd_entry, 1, 10, 2, 1);
-    mapping_grid->attach(_chk_long_pen_up, 0, 11, 1, 1);
-    auto *lbl_long_pen = Gtk::make_managed<Gtk::Label>(_("高抬笔位置"), Gtk::Align::START);
-    auto *lbl_long_move = Gtk::make_managed<Gtk::Label>(_("触发距离(mm)"), Gtk::Align::START);
-    mapping_grid->attach(*lbl_long_pen, 1, 11, 1, 1);
-    mapping_grid->attach(_long_pen_up_spin, 2, 11, 1, 1);
-    mapping_grid->attach(*lbl_long_move, 1, 12, 1, 1);
-    mapping_grid->attach(_long_move_dist_spin, 2, 12, 1, 1);
-    auto *mapping_hint = Gtk::make_managed<Gtk::Label>(
-        _("<small>绘图范围不再从固件自动读取，请在这里直接选 A/B/C/Letter/Legal 或自定义。"
-          "“同步绘图机参数”现在只同步方向类参数；交换 X/Y 仍属于主机侧映射，需要你按绘图机结构手动设置。"
-          "长距离高抬笔参考了 kxnx 绘图机软件中的做法；近距离连笔与起止 G-code 放在下方“绘图任务”区域统一设置。</small>"),
-        Gtk::Align::START);
-    mapping_hint->set_use_markup(true);
-    mapping_hint->set_wrap(true);
-    Inkscape::UI::pack_start(*box_mapping, *mapping_grid, false, false, 0);
-    Inkscape::UI::pack_start(*box_mapping, *mapping_hint, false, false, 0);
-    Inkscape::UI::pack_start(*box_mapping, _firmware_info_scroll, true, true, 0);
-    frame_mapping->set_child(*box_mapping);
-
-    auto *frame_motion = Gtk::make_managed<Gtk::Frame>();
-    frame_motion->set_label(_("走笔与点动"));
-    auto *box_motion = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
-    box_motion->append(*grid);
-    frame_motion->set_child(*box_motion);
-
-    auto *frame_log = Gtk::make_managed<Gtk::Frame>();
-    frame_log->set_label(_("日志"));
-    auto *box_log = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
-    auto *hdr_log = Gtk::make_managed<Gtk::Label>();
-    hdr_log->set_markup(_("<small>消息</small>"));
-    hdr_log->set_halign(Gtk::Align::START);
-    Inkscape::UI::pack_start(*box_log, *hdr_log, false, false, 0);
-    Inkscape::UI::pack_start(*box_log, _status, true, true, 0);
-    frame_log->set_child(*box_log);
+    auto *frame_layout = build_page_layout_section();
+    auto *job_summary_frame = build_job_summary_section();
+    auto *frame_serial = build_serial_section();
+    auto *frame_mapping = build_mapping_section();
+    auto *frame_motion = build_motion_section(*grid);
+    auto *frame_log = build_log_section();
 
     Inkscape::UI::pack_start(_vbox, *frame_layout, false, false, 0);
     Inkscape::UI::pack_start(_vbox, *job_summary_frame, false, false, 0);

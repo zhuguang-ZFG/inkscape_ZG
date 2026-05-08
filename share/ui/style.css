@@ -1876,6 +1876,59 @@ text-combobox .menuitem {
     border-spacing: 0;
 }
 
+/* GRBL control panel: denser industrial sections with clearer status/CTA hierarchy */
+.grbl-control-panel-root {
+    padding: 0;
+}
+
+.grbl-control-panel-root > border > label,
+.grbl-panel-section > border > label,
+.grbl-panel-section > label {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.grbl-panel-section {
+    border-radius: 6px;
+    padding: 4px;
+}
+
+.grbl-panel-note {
+    opacity: 0.88;
+    line-height: 1.35;
+}
+
+.grbl-panel-caption {
+    opacity: 0.75;
+}
+
+.grbl-panel-card {
+    background: mix(@theme_base_color, @theme_fg_color, 0.025);
+    border: 1px solid alpha(@borders, 0.9);
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+
+.grbl-panel-scroll {
+    background: transparent;
+}
+
+.grbl-panel-scroll > viewport {
+    background: transparent;
+}
+
+label.grbl-panel-status {
+    line-height: 1.35;
+}
+
+.grbl-control-panel-root button.suggested-action {
+    font-weight: 700;
+}
+
+.grbl-control-panel-root button.destructive-action {
+    font-weight: 700;
+}
+
 /* Style used by font grid items */
 .round-rect-shade {
     border-radius: 3px;

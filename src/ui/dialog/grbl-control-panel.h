@@ -71,6 +71,12 @@ public:
 
 private:
     void build_ui();
+    Gtk::Frame *build_page_layout_section();
+    Gtk::Frame *build_job_summary_section();
+    Gtk::Frame *build_serial_section();
+    Gtk::Frame *build_mapping_section();
+    Gtk::Frame *build_motion_section(Gtk::Grid &jog_grid);
+    Gtk::Frame *build_log_section();
     void on_map() override;
     void on_unmap() override;
     void desktopReplaced() override;
