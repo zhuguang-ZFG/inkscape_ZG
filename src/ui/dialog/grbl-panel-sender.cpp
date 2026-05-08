@@ -253,22 +253,38 @@ void GrblPanelSender::run_direct_send_worker(GrblPanelSenderContext const &conte
     }
 
     prepare_stream_link(context.link);
+    if (context.streaming_started) {
+        context.streaming_started(0);
+    }
 
     auto ctx = make_direct_send_context(desktop, selection, use_current_layer_without_selection, context.cancel,
                                         params.manual_pen_change && params.pen_change_prompt ? win : nullptr);
     attach_direct_send_progress_callbacks(context.post_status, ctx);
 
     context.with_plot_waits([&] {
+        bool streaming_finished = false;
+        auto const notify_finished = [&] {
+            if (!streaming_finished && context.streaming_finished) {
+                context.streaming_finished();
+            }
+            streaming_finished = true;
+        };
+
         std::string err;
         std::size_t strokes = 0;
         Inkscape::Axidraw::GrblPlotStats stats{};
         if (!Inkscape::Axidraw::export_paths_to_grbl(*serial, doc, params, ctx, err, &strokes, &stats)) {
+            if (!err.empty() && context.streaming_failed) {
+                context.streaming_failed(err);
+            }
+            notify_finished();
             context.post_gcode_stream_result(err);
             return;
         }
 
         context.refresh_plot_feedback_after_gcode_change();
         context.post_status(make_direct_send_done_status(strokes, stats), false);
+        notify_finished();
     });
     finish();
 }
@@ -295,10 +311,21 @@ void GrblPanelSender::run_editor_gcode_send_worker(GrblPanelSenderContext const 
     }
 
     prepare_stream_link(link);
+    if (context.streaming_started) {
+        context.streaming_started(total_exec);
+    }
 
     GcodeSendProgressTracker progress{.post_status = context.post_status, .total_exec = total_exec};
 
     context.with_plot_waits([&] {
+        bool streaming_finished = false;
+        auto const notify_finished = [&] {
+            if (!streaming_finished && context.streaming_finished) {
+                context.streaming_finished();
+            }
+            streaming_finished = true;
+        };
+
         std::string err;
         bool write_failed = false;
         std::size_t sent = 0;
@@ -314,12 +341,22 @@ void GrblPanelSender::run_editor_gcode_send_worker(GrblPanelSenderContext const 
                 write_failed = true;
                 return false;
             }
+            if (context.streaming_line_written) {
+                context.streaming_line_written();
+            }
+            if (context.streaming_reply_received) {
+                context.streaming_reply_received("ok");
+            }
             ++sent;
             progress.maybe_post(sent, false);
             return true;
         });
 
         if (write_failed) {
+            if (!err.empty() && context.streaming_failed) {
+                context.streaming_failed(err);
+            }
+            notify_finished();
             context.post_gcode_stream_result(err);
             return;
         }
@@ -328,6 +365,7 @@ void GrblPanelSender::run_editor_gcode_send_worker(GrblPanelSenderContext const 
         } else {
             post_gcode_send_completion(context.post_status, send_from_cursor, editor_line_1, sent);
         }
+        notify_finished();
     });
     finish();
 }

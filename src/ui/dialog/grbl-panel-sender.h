@@ -38,6 +38,11 @@ struct GrblPanelSenderContext {
     std::function<void()> refresh_plot_feedback_after_gcode_change;
     std::function<void(std::unique_lock<std::mutex> &)> finish_worker;
     std::function<void(std::function<void()>)> with_plot_waits;
+    std::function<void(std::size_t)> streaming_started;
+    std::function<void()> streaming_line_written;
+    std::function<void(std::string const &)> streaming_reply_received;
+    std::function<void(std::string const &)> streaming_failed;
+    std::function<void()> streaming_finished;
 };
 
 class GrblPanelSender {
